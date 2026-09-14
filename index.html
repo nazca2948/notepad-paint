@@ -55,30 +55,38 @@
   /* ---- 手書きモード時だけ出るツールバー ---- */
   .inkbar{
     display:flex;align-items:center;gap:12px;
-    padding:6px 10px;
+    height:40px;
+    padding:0 10px;
     background:#eef1fb;
     border-bottom:1px solid #c9d3ee;
     font-size:12px;
     flex-shrink:0;
+    flex-wrap:nowrap;
+    overflow-x:auto;
+    white-space:nowrap;
   }
   .inkbar.hidden{display:none;}
 
   /* ---- 手書きオフ時に出る文字設定バー ---- */
   .textbar{
     display:flex;align-items:center;gap:16px;
-    padding:6px 10px;
+    height:40px;
+    padding:0 10px;
     background:#f7f7f5;
     border-bottom:1px solid #e2e2dc;
     font-size:12px;
     flex-shrink:0;
+    flex-wrap:nowrap;
+    overflow-x:auto;
+    white-space:nowrap;
     color:#444;
   }
   .textbar.hidden{display:none;}
-  .textbar .group{display:flex;align-items:center;gap:6px;}
+  .textbar .group{display:flex;align-items:center;gap:6px;flex-shrink:0;height:100%;}
   .textbar input[type=range]{width:120px;}
   .textbar #fontSizeLabel{min-width:34px;display:inline-block;}
   .textbar label{display:flex;align-items:center;gap:5px;cursor:pointer;}
-  .inkbar .group{display:flex;align-items:center;gap:6px;}
+  .inkbar .group{display:flex;align-items:center;gap:6px;flex-shrink:0;height:100%;}
   .inkbar button.tool{
     border:1px solid transparent;
     background:transparent;
