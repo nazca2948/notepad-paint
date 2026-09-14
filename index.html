@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>メモ帳</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#2f5ea8">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="メモ帳">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+<style>
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0;padding:0;height:100%;
+    background:#fff;
+    font-family:"Segoe UI","Yu Gothic UI","Meiryo UI",sans-serif;
+    overflow:hidden;
+  }
+  .app{display:flex;flex-direction:column;height:100%;}
+
+  /* ---- 上部バー：普通のメモ帳っぽく最小限 ---- */
+  .topbar{
+    display:flex;align-items:center;
+    padding:5px 10px;
+    background:#f3f3f3;
+    border-bottom:1px solid #d9d9d9;
+    font-size:13px;
+    color:#333;
+    user-select:none;
+    flex-shrink:0;
+  }
+  .topbar .title{font-weight:600;color:#444;}
+  .topbar .right{margin-left:auto;display:flex;align-items:center;gap:10px;}
+  button#toggleDraw{
+    border:1px solid #c9c9c9;
+    background:#fff;
+    padding:4px 10px;
+    border-radius:4px;
+    font-size:13px;
+    cursor:pointer;
+    color:#333;
+  }
+  button#toggleDraw:hover{background:#eef1fb;}
+  button#toggleDraw.active{
+    background:#dbe6ff;
+    border-color:#7ea3f0;
+    color:#1c3f9e;
+    font-weight:600;
+  }
+  #status{font-size:12px;color:#999;min-width:64px;text-align:right;}
+
+  /* ---- 手書きモード時だけ出るツールバー ---- */
+  .inkbar{
+    display:flex;align-items:center;gap:12px;
+    padding:6px 10px;
+    background:#eef1fb;
+    border-bottom:1px solid #c9d3ee;
+    font-size:12px;
+    flex-shrink:0;
+  }
+  .inkbar.hidden{display:none;}
+
+  /* ---- 手書きオフ時に出る文字設定バー ---- */
+  .textbar{
+    display:flex;align-items:center;gap:16px;
+    padding:6px 10px;
+    background:#f7f7f5;
+    border-bottom:1px solid #e2e2dc;
+    font-size:12px;
+    flex-shrink:0;
+    color:#444;
+  }
+  .textbar.hidden{display:none;}
+  .textbar .group{display:flex;align-items:center;gap:6px;}
+  .textbar input[type=range]{width:120px;}
+  .textbar #fontSizeLabel{min-width:34px;display:inline-block;}
+  .textbar label{display:flex;align-items:center;gap:5px;cursor:pointer;}
+  .inkbar .group{display:flex;align-items:center;gap:6px;}
+  .inkbar button.tool{
+    border:1px solid transparent;
+    background:transparent;
+    padding:4px 9px;
+    border-radius:4px;
+    font-size:12px;
+    cursor:pointer;
+    color:#333;
+  }
+  .inkbar button.tool:hover{background:#e0e7fb;}
+  .inkbar button.tool.active{background:#fff;border-color:#a9bce8;font-weight:600;}
+  .swatch{
+    width:18px;height:18px;border-radius:50%;
+    border:2px solid transparent;
+    cursor:pointer;padding:0;
+  }
+  .swatch.selected{border-color:#555;}
+  .inkbar input[type=range]{width:70px;}
+  .inkbar button.action{
+    border:1px solid #a9bce8;
+    background:#fff;
+    padding:4px 9px;
+    border-radius:4px;
+    font-size:12px;
+    cursor:pointer;
+  }
+  .inkbar button.action:hover{background:#f5f7fd;}
+  .inkbar button.action:disabled{opacity:0.4;cursor:default;background:#fff;}
+
+  /* ---- 本体：メモ帳そのもの ---- */
+  .editor-wrap{
+    position:relative;
+    flex:1;
+    overflow:hidden;
+  }
+  textarea#text{
+    position:absolute;top:0;left:0;
+    width:100%;height:100%;
+    border:none;outline:none;resize:none;
+    padding:10px 14px;
+    font-family:"Yu Gothic Bold","Yu Gothic UI Bold","Yu Gothic","Meiryo",sans-serif;
+    font-weight:700;
+    font-size:19px;
+    line-height:1.6;
+    color:#111;
+    background:#fff;
+  }
+  canvas#ink{
+    position:absolute;top:0;left:0;
+    pointer-events:none;
+    touch-action:none;
+  }
+  canvas#ink.draw-pen, canvas#ink.draw-eraser{cursor:crosshair;pointer-events:auto;}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <span class="title">メモ帳</span>
+    <div class="right">
+      <button id="toggleDraw">✏ 手書き</button>
+      <span id="status">読み込み中…</span>
+    </div>
+  </div>
+
+  <div class="textbar" id="textbar">
+    <div class="group">
+      <span>文字サイズ</span>
+      <input type="range" id="fontSize" min="12" max="80" value="19">
+      <span id="fontSizeLabel">19px</span>
+    </div>
+    <div class="group">
+      <label><input type="checkbox" id="boldToggle" checked> 太字</label>
+    </div>
+  </div>
+
+  <div class="inkbar hidden" id="inkbar">
+    <div class="group">
+      <button class="tool active" data-tool="pen">ペン</button>
+      <button class="tool" data-tool="eraser">消しゴム</button>
+    </div>
+    <div class="group">
+      <button class="swatch selected" data-color="#1a1a1a" style="background:#1a1a1a;"></button>
+      <button class="swatch" data-color="#2f5ea8" style="background:#2f5ea8;"></button>
+      <button class="swatch" data-color="#b3392c" style="background:#b3392c;"></button>
+      <button class="swatch" data-color="#2f7a4f" style="background:#2f7a4f;"></button>
+    </div>
+    <div class="group">
+      <span>太さ</span>
+      <input type="range" id="width" min="1" max="14" value="3">
+    </div>
+    <div class="group">
+      <button class="action" id="undo">元に戻す</button>
+      <button class="action" id="redo">やり直す</button>
+      <button class="action" id="clearInk">手書きだけ消去</button>
+    </div>
+  </div>
+
+  <div class="editor-wrap" id="wrap">
+    <textarea id="text" spellcheck="false" placeholder=""></textarea>
+    <canvas id="ink"></canvas>
+  </div>
+</div>
+
+<script>
+(function(){
+  const wrap = document.getElementById('wrap');
+  const textEl = document.getElementById('text');
+  const canvas = document.getElementById('ink');
+  const ctx = canvas.getContext('2d');
+  const statusEl = document.getElementById('status');
+  const toggleBtn = document.getElementById('toggleDraw');
+  const inkbar = document.getElementById('inkbar');
+  const textbar = document.getElementById('textbar');
+  const fontSizeInput = document.getElementById('fontSize');
+  const fontSizeLabel = document.getElementById('fontSizeLabel');
+  const boldToggle = document.getElementById('boldToggle');
+  const widthInput = document.getElementById('width');
+  const undoBtn = document.getElementById('undo');
+  const redoBtn = document.getElementById('redo');
+
+  let drawMode = false;
+  let tool = 'pen';
+  let currentColor = '#1a1a1a';
+  let currentWidth = 3;
+  let isDrawing = false;
+  let lastX = 0, lastY = 0;
+  const undoStack = [];
+  const redoStack = [];
+  const DPR = window.devicePixelRatio || 1;
+
+  // ---------- キャンバスのサイズをウィンドウに合わせる ----------
+  function resizeCanvas(){
+    const w = wrap.clientWidth, h = wrap.clientHeight;
+    // 既存の内容を退避
+    let prevData = null;
+    if(canvas.width > 0 && canvas.height > 0){
+      prevData = canvas.toDataURL('image/png');
+    }
+    canvas.width = w * DPR;
+    canvas.height = h * DPR;
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    ctx.scale(DPR, DPR);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    if(prevData){
+      const img = new Image();
+      img.onload = ()=>{ ctx.drawImage(img, 0, 0, w, h); };
+      img.src = prevData;
+    }
+  }
+  let resizeTimer;
+  window.addEventListener('resize', ()=>{
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(resizeCanvas, 150);
+  });
+  resizeCanvas();
+
+  // ---------- 手書きモードの切り替え ----------
+  function setDrawMode(on){
+    drawMode = on;
+    toggleBtn.classList.toggle('active', on);
+    inkbar.classList.toggle('hidden', !on);
+    textbar.classList.toggle('hidden', on);
+    canvas.classList.toggle('draw-pen', on && tool==='pen');
+    canvas.classList.toggle('draw-eraser', on && tool==='eraser');
+    textEl.readOnly = on;
+    if(!on) textEl.focus();
+  }
+  toggleBtn.addEventListener('click', ()=>setDrawMode(!drawMode));
+
+  document.querySelectorAll('.inkbar button.tool').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      tool = b.dataset.tool;
+      document.querySelectorAll('.inkbar button.tool').forEach(x=>x.classList.toggle('active', x===b));
+      canvas.classList.toggle('draw-pen', drawMode && tool==='pen');
+      canvas.classList.toggle('draw-eraser', drawMode && tool==='eraser');
+    });
+  });
+  document.querySelectorAll('.swatch').forEach(s=>{
+    s.addEventListener('click', ()=>{
+      currentColor = s.dataset.color;
+      document.querySelectorAll('.swatch').forEach(x=>x.classList.remove('selected'));
+      s.classList.add('selected');
+    });
+  });
+  widthInput.addEventListener('input', ()=>{ currentWidth = parseInt(widthInput.value,10); });
+
+  // ---------- 文字サイズ・太字 ----------
+  function applyFontSize(px){
+    textEl.style.fontSize = px + 'px';
+    fontSizeLabel.textContent = px + 'px';
+  }
+  function applyBold(on){
+    textEl.style.fontWeight = on ? '700' : '400';
+  }
+  fontSizeInput.addEventListener('input', ()=>{
+    applyFontSize(fontSizeInput.value);
+    scheduleSave();
+  });
+  boldToggle.addEventListener('change', ()=>{
+    applyBold(boldToggle.checked);
+    scheduleSave();
+  });
+
+  // ---------- 保存・読み込み（localStorage） ----------
+  const STORAGE_KEY = 'notepad-data';
+  let saveTimer = null;
+  function scheduleSave(){
+    statusEl.textContent = '保存中…';
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(doSave, 700);
+  }
+  function doSave(){
+    try{
+      const payload = {
+        text: textEl.value,
+        ink: canvas.toDataURL('image/png'),
+        fontSize: parseInt(fontSizeInput.value, 10),
+        bold: boldToggle.checked
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      statusEl.textContent = '保存済み';
+    }catch(e){
+      console.error('save failed', e);
+      statusEl.textContent = '保存エラー（容量不足の可能性）';
+    }
+  }
+  textEl.addEventListener('input', scheduleSave);
+
+  async function loadNote(){
+    try{
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if(raw){
+        const data = JSON.parse(raw);
+        textEl.value = data.text || '';
+        if(data.fontSize){
+          fontSizeInput.value = data.fontSize;
+          applyFontSize(data.fontSize);
+        }
+        if(typeof data.bold === 'boolean'){
+          boldToggle.checked = data.bold;
+          applyBold(data.bold);
+        }
+        if(data.ink){
+          await new Promise((resolve)=>{
+            const img = new Image();
+            img.onload = ()=>{
+              ctx.drawImage(img, 0, 0, wrap.clientWidth, wrap.clientHeight);
+              resolve();
+            };
+            img.onerror = resolve;
+            img.src = data.ink;
+          });
+        }
+      }
+    }catch(e){
+      // 保存データがまだ無い
+    }
+    statusEl.textContent = '保存済み';
+    updateUndoRedoButtons();
+  }
+
+  // ---------- 手書きの undo / redo ----------
+  function pushUndo(){
+    undoStack.push(canvas.toDataURL('image/png'));
+    if(undoStack.length>30) undoStack.shift();
+    redoStack.length = 0; // 新しい操作をしたらやり直し履歴は破棄
+    updateUndoRedoButtons();
+  }
+  function restoreImage(dataURL, onDone){
+    const w = wrap.clientWidth, h = wrap.clientHeight;
+    const img = new Image();
+    img.onload = ()=>{
+      ctx.clearRect(0,0,w,h);
+      ctx.drawImage(img,0,0,w,h);
+      if(onDone) onDone();
+    };
+    img.src = dataURL;
+  }
+  function doInkUndo(){
+    if(undoStack.length===0) return;
+    redoStack.push(canvas.toDataURL('image/png'));
+    const prev = undoStack.pop();
+    restoreImage(prev, ()=>{ scheduleSave(); updateUndoRedoButtons(); });
+  }
+  function doInkRedo(){
+    if(redoStack.length===0) return;
+    undoStack.push(canvas.toDataURL('image/png'));
+    const next = redoStack.pop();
+    restoreImage(next, ()=>{ scheduleSave(); updateUndoRedoButtons(); });
+  }
+  function updateUndoRedoButtons(){
+    undoBtn.disabled = undoStack.length===0;
+    redoBtn.disabled = redoStack.length===0;
+  }
+  undoBtn.addEventListener('click', doInkUndo);
+  redoBtn.addEventListener('click', doInkRedo);
+  updateUndoRedoButtons();
+
+  document.getElementById('clearInk').addEventListener('click', ()=>{
+    if(!confirm('手書き部分だけを消去します。よろしいですか？（文字は消えません）')) return;
+    pushUndo();
+    ctx.clearRect(0,0,wrap.clientWidth,wrap.clientHeight);
+    scheduleSave();
+  });
+
+  // ---------- キーボードショートカット：Ctrl+Z / Ctrl+Y ----------
+  // 手書きモード中だけ手書きのUndo/Redoを横取りする。
+  // 通常のタイピング中はブラウザ標準のテキストUndo/Redoに任せる（何もしない）。
+  window.addEventListener('keydown', (e)=>{
+    const ctrlOrCmd = e.ctrlKey || e.metaKey;
+    if(!ctrlOrCmd || !drawMode) return;
+    const key = e.key.toLowerCase();
+    if(key === 'z' && !e.shiftKey){
+      e.preventDefault();
+      doInkUndo();
+    }else if(key === 'y' || (key === 'z' && e.shiftKey)){
+      e.preventDefault();
+      doInkRedo();
+    }
+  });
+
+  // ---------- 描画 ----------
+  function getPos(e){ return { x: e.offsetX, y: e.offsetY }; }
+
+  canvas.addEventListener('pointerdown', (e)=>{
+    if(!drawMode) return;
+    pushUndo();
+    isDrawing = true;
+    canvas.setPointerCapture(e.pointerId);
+    const {x,y} = getPos(e);
+    lastX = x; lastY = y;
+  });
+  canvas.addEventListener('pointermove', (e)=>{
+    if(!isDrawing) return;
+    const {x,y} = getPos(e);
+    ctx.globalCompositeOperation = (tool==='eraser') ? 'destination-out' : 'source-over';
+    ctx.strokeStyle = currentColor;
+    ctx.lineWidth = (tool==='eraser') ? Math.max(currentWidth*4, 14) : currentWidth;
+    ctx.beginPath();
+    ctx.moveTo(lastX, lastY);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+    lastX = x; lastY = y;
+  });
+  function endStroke(){
+    if(!isDrawing) return;
+    isDrawing = false;
+    scheduleSave();
+  }
+  canvas.addEventListener('pointerup', endStroke);
+  canvas.addEventListener('pointercancel', endStroke);
+  canvas.addEventListener('pointerleave', ()=>{ if(isDrawing) endStroke(); });
+
+  loadNote();
+})();
+
+// ---------- Service Worker登録（オフライン対応） ----------
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('sw.js').catch(err=>{
+      console.warn('Service Worker登録に失敗:', err);
+    });
+  });
+}
+
+</script>
+</body>
+</html>
