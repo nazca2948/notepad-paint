@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>メモ帳</title>
+<title>メモ帳ペイント</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#2f5ea8">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -131,7 +131,7 @@
     pointer-events:none;
     touch-action:none;
   }
-  canvas#ink.draw-pen, canvas#ink.draw-eraser{cursor:crosshair;pointer-events:auto;}
+  canvas#ink.draw-pen, canvas#ink.draw-eraser, canvas#ink.draw-line{cursor:crosshair;pointer-events:auto;}
 </style>
 </head>
 <body>
@@ -159,6 +159,7 @@
     <div class="group">
       <button class="tool active" data-tool="pen">ペン</button>
       <button class="tool" data-tool="eraser">消しゴム</button>
+      <button class="tool" data-tool="line">直線</button>
     </div>
     <div class="group">
       <button class="swatch selected" data-color="#1a1a1a" style="background:#1a1a1a;"></button>
@@ -246,6 +247,7 @@
     textbar.classList.toggle('hidden', on);
     canvas.classList.toggle('draw-pen', on && tool==='pen');
     canvas.classList.toggle('draw-eraser', on && tool==='eraser');
+    canvas.classList.toggle('draw-line', on && tool==='line');
     textEl.readOnly = on;
     if(!on) textEl.focus();
   }
@@ -257,6 +259,7 @@
       document.querySelectorAll('.inkbar button.tool').forEach(x=>x.classList.toggle('active', x===b));
       canvas.classList.toggle('draw-pen', drawMode && tool==='pen');
       canvas.classList.toggle('draw-eraser', drawMode && tool==='eraser');
+      canvas.classList.toggle('draw-line', drawMode && tool==='line');
     });
   });
   document.querySelectorAll('.swatch').forEach(s=>{
@@ -406,6 +409,32 @@
   // ---------- 描画 ----------
   function getPos(e){ return { x: e.offsetX, y: e.offsetY }; }
 
+  // 直線ツール用：ドラッグ中のプレビュー表示に使う退避キャンバス
+  const previewCanvas = document.createElement('canvas');
+  const previewCtx = previewCanvas.getContext('2d');
+  let lineStartX = 0, lineStartY = 0;
+
+  function snapshotForLinePreview(){
+    previewCanvas.width = canvas.width;
+    previewCanvas.height = canvas.height;
+    previewCtx.clearRect(0,0,previewCanvas.width,previewCanvas.height);
+    previewCtx.drawImage(canvas, 0, 0);
+  }
+  function restoreLinePreviewBase(){
+    const w = wrap.clientWidth, h = wrap.clientHeight;
+    ctx.clearRect(0,0,w,h);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(previewCanvas, 0, 0, w, h);
+  }
+  // Shiftキー押下時：水平・垂直・45度に吸着
+  function applyAngleSnap(x0, y0, x, y, snap){
+    if(!snap) return {x, y};
+    const dx = x - x0, dy = y - y0;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    const angle = Math.round(Math.atan2(dy, dx) / (Math.PI/4)) * (Math.PI/4);
+    return { x: x0 + Math.cos(angle) * dist, y: y0 + Math.sin(angle) * dist };
+  }
+
   canvas.addEventListener('pointerdown', (e)=>{
     if(!drawMode) return;
     pushUndo();
@@ -413,10 +442,27 @@
     canvas.setPointerCapture(e.pointerId);
     const {x,y} = getPos(e);
     lastX = x; lastY = y;
+    if(tool === 'line'){
+      lineStartX = x; lineStartY = y;
+      snapshotForLinePreview();
+    }
   });
   canvas.addEventListener('pointermove', (e)=>{
     if(!isDrawing) return;
-    const {x,y} = getPos(e);
+    let {x,y} = getPos(e);
+
+    if(tool === 'line'){
+      ({x, y} = applyAngleSnap(lineStartX, lineStartY, x, y, e.shiftKey));
+      restoreLinePreviewBase();
+      ctx.strokeStyle = currentColor;
+      ctx.lineWidth = currentWidth;
+      ctx.beginPath();
+      ctx.moveTo(lineStartX, lineStartY);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+      return;
+    }
+
     ctx.globalCompositeOperation = (tool==='eraser') ? 'destination-out' : 'source-over';
     ctx.strokeStyle = currentColor;
     ctx.lineWidth = (tool==='eraser') ? Math.max(currentWidth*4, 14) : currentWidth;
