@@ -1,8 +1,9 @@
 // メモ帳PWA用 Service Worker
-// アプリの見た目（HTML/manifest/アイコン）をオフラインでも開けるようキャッシュします。
-// メモの中身自体は localStorage に保存されるため、このキャッシュとは無関係です。
+// ネットワークを優先して常に最新版を読み込み、
+// オフラインの時だけ最後に取得できたキャッシュにフォールバックします。
+// これにより index.html だけ更新すれば、次回アクセス時に自動で反映されます。
 
-const CACHE_NAME = 'memo-notepad-v1';
+const CACHE_NAME = 'memo-notepad-v2';
 const APP_SHELL = [
   './',
   './index.html',
@@ -30,22 +31,18 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// キャッシュ優先、なければネットワークから取得して次回用にキャッシュ
+// ネットワーク優先：取得できたら常にそれを使い、キャッシュも更新しておく。
+// オフライン等で取得できない場合だけ、キャッシュにあるものを返す。
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
 
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) return cached;
-      return fetch(event.request)
-        .then((response) => {
-          if (response && response.status === 200 && response.type === 'basic') {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-          }
-          return response;
-        })
-        .catch(() => cached);
-    })
+    fetch(event.request)
+      .then((response) => {
+        const clone = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+        return response;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
