@@ -105,6 +105,13 @@
   }
   .swatch.selected{border-color:#555;}
   .inkbar input[type=range]{width:70px;}
+  .inkbar input[type=number]{
+    width:40px;
+    padding:2px 4px;
+    border:1px solid #c3cdec;
+    border-radius:4px;
+    font-size:12px;
+  }
   .inkbar button.action{
     border:1px solid #a9bce8;
     background:#fff;
@@ -116,11 +123,18 @@
   .inkbar button.action:hover{background:#f5f7fd;}
   .inkbar button.action:disabled{opacity:0.4;cursor:default;background:#fff;}
 
-  /* ---- 本体：メモ帳そのもの ---- */
+  /* ---- 本体：1枚の紙としてスクロールするエリア ---- */
   .editor-wrap{
     position:relative;
     flex:1;
-    overflow:hidden;
+    overflow-y:auto;
+    overflow-x:hidden;
+  }
+  /* .sheet が「紙」そのもの。textareaとcanvasはこの中で同じ座標系に重なる */
+  .sheet{
+    position:relative;
+    width:100%;
+    /* 高さはJSで内容量に応じて設定（初期値はビューポート分） */
   }
   textarea#text{
     position:absolute;top:0;left:0;
@@ -132,14 +146,14 @@
     font-size:19px;
     line-height:1.6;
     color:#111;
-    background:#fff;
+    background:transparent;
   }
   canvas#ink{
     position:absolute;top:0;left:0;
     pointer-events:none;
     touch-action:none;
   }
-  canvas#ink.draw-pen, canvas#ink.draw-eraser, canvas#ink.draw-line{cursor:crosshair;pointer-events:auto;}
+  canvas#ink.draw-pen, canvas#ink.draw-eraser, canvas#ink.draw-line, canvas#ink.draw-grid{cursor:crosshair;pointer-events:auto;}
 </style>
 </head>
 <body>
@@ -184,17 +198,26 @@
       <button class="action" id="redo">やり直す</button>
       <button class="action" id="clearInk">手書きだけ消去</button>
     </div>
+    <div class="group">
+      <button class="tool" data-tool="grid">グリッド</button>
+      <input type="number" id="gridRows" min="1" max="30" value="4" title="行数">
+      <span>×</span>
+      <input type="number" id="gridCols" min="1" max="30" value="4" title="列数">
+    </div>
   </div>
 
   <div class="editor-wrap" id="wrap">
-    <textarea id="text" spellcheck="false" placeholder=""></textarea>
-    <canvas id="ink"></canvas>
+    <div class="sheet" id="sheet">
+      <textarea id="text" spellcheck="false" placeholder=""></textarea>
+      <canvas id="ink"></canvas>
+    </div>
   </div>
 </div>
 
 <script>
 (function(){
   const wrap = document.getElementById('wrap');
+  const sheet = document.getElementById('sheet');
   const textEl = document.getElementById('text');
   const canvas = document.getElementById('ink');
   const ctx = canvas.getContext('2d');
@@ -208,6 +231,8 @@
   const widthInput = document.getElementById('width');
   const undoBtn = document.getElementById('undo');
   const redoBtn = document.getElementById('redo');
+  const gridRowsInput = document.getElementById('gridRows');
+  const gridColsInput = document.getElementById('gridCols');
 
   let drawMode = false;
   let tool = 'pen';
@@ -219,33 +244,70 @@
   const redoStack = [];
   const DPR = window.devicePixelRatio || 1;
 
-  // ---------- キャンバスのサイズをウィンドウに合わせる ----------
-  function resizeCanvas(){
-    const w = wrap.clientWidth, h = wrap.clientHeight;
-    // 既存の内容を退避
-    let prevData = null;
+  // 「紙」の現在の高さ（論理px）。手書きとテキストの両方がこの1枚の中で共存し、
+  // wrap全体がスクロールすることで、手書き・文字が常に連動して動く。
+  let currentSheetHeight = 0;
+
+  // ---------- キャンバス（＝紙）のサイズ変更。既存の絵は伸縮させず、そのままの位置で保持 ----------
+  function resizeCanvasTo(newW, newH){
+    const curLogicalW = canvas.width ? canvas.width / DPR : 0;
+    const curLogicalH = canvas.height ? canvas.height / DPR : 0;
+    if(Math.round(curLogicalW) === Math.round(newW) && Math.round(curLogicalH) === Math.round(newH)) return;
+
+    let backup = null;
     if(canvas.width > 0 && canvas.height > 0){
-      prevData = canvas.toDataURL('image/png');
+      backup = document.createElement('canvas');
+      backup.width = canvas.width;
+      backup.height = canvas.height;
+      backup.getContext('2d').drawImage(canvas, 0, 0);
     }
-    canvas.width = w * DPR;
-    canvas.height = h * DPR;
-    canvas.style.width = w + 'px';
-    canvas.style.height = h + 'px';
+
+    canvas.width = newW * DPR;
+    canvas.height = newH * DPR;
+    canvas.style.width = newW + 'px';
+    canvas.style.height = newH + 'px';
+    ctx.setTransform(1,0,0,1,0,0);
     ctx.scale(DPR, DPR);
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    if(prevData){
-      const img = new Image();
-      img.onload = ()=>{ ctx.drawImage(img, 0, 0, w, h); };
-      img.src = prevData;
+
+    if(backup && curLogicalW > 0 && curLogicalH > 0){
+      ctx.drawImage(backup, 0, 0, curLogicalW, curLogicalH);
     }
+
+    currentSheetHeight = newH;
+    sheet.style.height = newH + 'px';
   }
+
+  function growCanvasTo(newHeightLogical){
+    if(newHeightLogical <= currentSheetHeight) return;
+    resizeCanvasTo(wrap.clientWidth, newHeightLogical);
+  }
+
+  // テキストの内容量から必要な高さを測り、足りなければ紙を伸ばす（縮めることはしない）
+  function measureAndGrow(){
+    const prevHeight = textEl.style.height;
+    textEl.style.height = 'auto';
+    const contentH = textEl.scrollHeight;
+    textEl.style.height = prevHeight || '100%';
+    const desired = Math.max(contentH + 20, wrap.clientHeight, currentSheetHeight);
+    growCanvasTo(desired);
+    textEl.style.height = '100%';
+  }
+
+  function initCanvasSize(){
+    resizeCanvasTo(wrap.clientWidth, wrap.clientHeight);
+  }
+  initCanvasSize();
+
   let resizeTimer;
   window.addEventListener('resize', ()=>{
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(resizeCanvas, 150);
+    resizeTimer = setTimeout(()=>{
+      resizeCanvasTo(wrap.clientWidth, Math.max(currentSheetHeight, wrap.clientHeight));
+      measureAndGrow();
+    }, 150);
   });
-  resizeCanvas();
 
   // ---------- 手書きモードの切り替え ----------
   function setDrawMode(on){
@@ -256,6 +318,7 @@
     canvas.classList.toggle('draw-pen', on && tool==='pen');
     canvas.classList.toggle('draw-eraser', on && tool==='eraser');
     canvas.classList.toggle('draw-line', on && tool==='line');
+    canvas.classList.toggle('draw-grid', on && tool==='grid');
     textEl.readOnly = on;
     if(!on) textEl.focus();
   }
@@ -268,6 +331,7 @@
       canvas.classList.toggle('draw-pen', drawMode && tool==='pen');
       canvas.classList.toggle('draw-eraser', drawMode && tool==='eraser');
       canvas.classList.toggle('draw-line', drawMode && tool==='line');
+      canvas.classList.toggle('draw-grid', drawMode && tool==='grid');
     });
   });
   document.querySelectorAll('.swatch').forEach(s=>{
@@ -289,10 +353,12 @@
   }
   fontSizeInput.addEventListener('input', ()=>{
     applyFontSize(fontSizeInput.value);
+    measureAndGrow();
     scheduleSave();
   });
   boldToggle.addEventListener('change', ()=>{
     applyBold(boldToggle.checked);
+    measureAndGrow();
     scheduleSave();
   });
 
@@ -309,6 +375,8 @@
       const payload = {
         text: textEl.value,
         ink: canvas.toDataURL('image/png'),
+        inkW: Math.round(canvas.width / DPR),
+        inkH: Math.round(canvas.height / DPR),
         fontSize: parseInt(fontSizeInput.value, 10),
         bold: boldToggle.checked
       };
@@ -319,7 +387,10 @@
       statusEl.textContent = '保存エラー（容量不足の可能性）';
     }
   }
-  textEl.addEventListener('input', scheduleSave);
+  textEl.addEventListener('input', ()=>{
+    measureAndGrow();
+    scheduleSave();
+  });
 
   async function loadNote(){
     try{
@@ -335,11 +406,16 @@
           boldToggle.checked = data.bold;
           applyBold(data.bold);
         }
+        // 保存されていたテキストの分だけ先に紙を伸ばしてから、手書きを重ねる
+        measureAndGrow();
         if(data.ink){
+          const savedH = data.inkH || currentSheetHeight;
+          const savedW = data.inkW || wrap.clientWidth;
+          growCanvasTo(savedH);
           await new Promise((resolve)=>{
             const img = new Image();
             img.onload = ()=>{
-              ctx.drawImage(img, 0, 0, wrap.clientWidth, wrap.clientHeight);
+              ctx.drawImage(img, 0, 0, savedW, savedH);
               resolve();
             };
             img.onerror = resolve;
@@ -355,33 +431,39 @@
   }
 
   // ---------- 手書きの undo / redo ----------
+  function currentSnapshot(){
+    return { data: canvas.toDataURL('image/png'), h: currentSheetHeight };
+  }
   function pushUndo(){
-    undoStack.push(canvas.toDataURL('image/png'));
+    undoStack.push(currentSnapshot());
     if(undoStack.length>30) undoStack.shift();
     redoStack.length = 0; // 新しい操作をしたらやり直し履歴は破棄
     updateUndoRedoButtons();
   }
-  function restoreImage(dataURL, onDone){
-    const w = wrap.clientWidth, h = wrap.clientHeight;
+  function restoreSnapshot(entry, onDone){
+    if(entry.h > currentSheetHeight){
+      resizeCanvasTo(wrap.clientWidth, entry.h);
+    }
+    const w = wrap.clientWidth, h = currentSheetHeight;
     const img = new Image();
     img.onload = ()=>{
       ctx.clearRect(0,0,w,h);
-      ctx.drawImage(img,0,0,w,h);
+      ctx.drawImage(img, 0, 0, w, entry.h); // 記録時の高さのまま、伸縮させずに描画
       if(onDone) onDone();
     };
-    img.src = dataURL;
+    img.src = entry.data;
   }
   function doInkUndo(){
     if(undoStack.length===0) return;
-    redoStack.push(canvas.toDataURL('image/png'));
+    redoStack.push(currentSnapshot());
     const prev = undoStack.pop();
-    restoreImage(prev, ()=>{ scheduleSave(); updateUndoRedoButtons(); });
+    restoreSnapshot(prev, ()=>{ scheduleSave(); updateUndoRedoButtons(); });
   }
   function doInkRedo(){
     if(redoStack.length===0) return;
-    undoStack.push(canvas.toDataURL('image/png'));
+    undoStack.push(currentSnapshot());
     const next = redoStack.pop();
-    restoreImage(next, ()=>{ scheduleSave(); updateUndoRedoButtons(); });
+    restoreSnapshot(next, ()=>{ scheduleSave(); updateUndoRedoButtons(); });
   }
   function updateUndoRedoButtons(){
     undoBtn.disabled = undoStack.length===0;
@@ -394,7 +476,7 @@
   document.getElementById('clearInk').addEventListener('click', ()=>{
     if(!confirm('手書き部分だけを消去します。よろしいですか？（文字は消えません）')) return;
     pushUndo();
-    ctx.clearRect(0,0,wrap.clientWidth,wrap.clientHeight);
+    ctx.clearRect(0,0,wrap.clientWidth,currentSheetHeight);
     scheduleSave();
   });
 
@@ -417,19 +499,19 @@
   // ---------- 描画 ----------
   function getPos(e){ return { x: e.offsetX, y: e.offsetY }; }
 
-  // 直線ツール用：ドラッグ中のプレビュー表示に使う退避キャンバス
+  // 直線・グリッドツール用：ドラッグ中のプレビュー表示に使う退避キャンバス
   const previewCanvas = document.createElement('canvas');
   const previewCtx = previewCanvas.getContext('2d');
-  let lineStartX = 0, lineStartY = 0;
+  let dragStartX = 0, dragStartY = 0;
 
-  function snapshotForLinePreview(){
+  function snapshotForPreview(){
     previewCanvas.width = canvas.width;
     previewCanvas.height = canvas.height;
     previewCtx.clearRect(0,0,previewCanvas.width,previewCanvas.height);
     previewCtx.drawImage(canvas, 0, 0);
   }
-  function restoreLinePreviewBase(){
-    const w = wrap.clientWidth, h = wrap.clientHeight;
+  function restorePreviewBase(){
+    const w = wrap.clientWidth, h = currentSheetHeight;
     ctx.clearRect(0,0,w,h);
     ctx.globalCompositeOperation = 'source-over';
     ctx.drawImage(previewCanvas, 0, 0, w, h);
@@ -442,6 +524,36 @@
     const angle = Math.round(Math.atan2(dy, dx) / (Math.PI/4)) * (Math.PI/4);
     return { x: x0 + Math.cos(angle) * dist, y: y0 + Math.sin(angle) * dist };
   }
+  // ドラッグした対角線を「1マスの対角線」として、指定した行×列数の正方形グリッドを描く
+  function drawGrid(x0, y0, x1, y1){
+    const dx = x1 - x0, dy = y1 - y0;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    if(dist < 3) return; // 小さすぎるドラッグは無視
+
+    const rows = Math.max(1, Math.min(200, parseInt(gridRowsInput.value,10) || 1));
+    const cols = Math.max(1, Math.min(200, parseInt(gridColsInput.value,10) || 1));
+    const side = dist / Math.SQRT2; // 対角線→正方形の一辺
+    const dirX = (x1 >= x0) ? 1 : -1;
+    const dirY = (y1 >= y0) ? 1 : -1;
+
+    const left = (dirX > 0) ? x0 : x0 - cols*side;
+    const top = (dirY > 0) ? y0 : y0 - rows*side;
+    const right = left + cols*side;
+    const bottom = top + rows*side;
+
+    ctx.strokeStyle = currentColor;
+    ctx.lineWidth = currentWidth;
+    ctx.beginPath();
+    for(let r=0; r<=rows; r++){
+      const y = top + side*r;
+      ctx.moveTo(left, y); ctx.lineTo(right, y);
+    }
+    for(let c=0; c<=cols; c++){
+      const x = left + side*c;
+      ctx.moveTo(x, top); ctx.lineTo(x, bottom);
+    }
+    ctx.stroke();
+  }
 
   canvas.addEventListener('pointerdown', (e)=>{
     if(!drawMode) return;
@@ -450,9 +562,9 @@
     canvas.setPointerCapture(e.pointerId);
     const {x,y} = getPos(e);
     lastX = x; lastY = y;
-    if(tool === 'line'){
-      lineStartX = x; lineStartY = y;
-      snapshotForLinePreview();
+    if(tool === 'line' || tool === 'grid'){
+      dragStartX = x; dragStartY = y;
+      snapshotForPreview();
     }
   });
   canvas.addEventListener('pointermove', (e)=>{
@@ -460,14 +572,20 @@
     let {x,y} = getPos(e);
 
     if(tool === 'line'){
-      ({x, y} = applyAngleSnap(lineStartX, lineStartY, x, y, e.shiftKey));
-      restoreLinePreviewBase();
+      ({x, y} = applyAngleSnap(dragStartX, dragStartY, x, y, e.shiftKey));
+      restorePreviewBase();
       ctx.strokeStyle = currentColor;
       ctx.lineWidth = currentWidth;
       ctx.beginPath();
-      ctx.moveTo(lineStartX, lineStartY);
+      ctx.moveTo(dragStartX, dragStartY);
       ctx.lineTo(x, y);
       ctx.stroke();
+      return;
+    }
+
+    if(tool === 'grid'){
+      restorePreviewBase();
+      drawGrid(dragStartX, dragStartY, x, y);
       return;
     }
 
@@ -500,7 +618,6 @@ if('serviceWorker' in navigator){
     });
   });
 }
-
 </script>
 </body>
 </html>
