@@ -194,9 +194,7 @@
       <input type="range" id="width" min="1" max="14" value="3">
     </div>
     <div class="group">
-      <button class="action" id="undo">元に戻す</button>
-      <button class="action" id="redo">やり直す</button>
-      <button class="action" id="clearInk">手書きだけ消去</button>
+      <button class="action" id="clearInk">手書き消去</button>
     </div>
     <div class="group">
       <button class="tool" data-tool="grid">グリッド</button>
@@ -229,8 +227,6 @@
   const fontSizeLabel = document.getElementById('fontSizeLabel');
   const boldToggle = document.getElementById('boldToggle');
   const widthInput = document.getElementById('width');
-  const undoBtn = document.getElementById('undo');
-  const redoBtn = document.getElementById('redo');
   const gridRowsInput = document.getElementById('gridRows');
   const gridColsInput = document.getElementById('gridCols');
 
@@ -427,7 +423,6 @@
       // 保存データがまだ無い
     }
     statusEl.textContent = '保存済み';
-    updateUndoRedoButtons();
   }
 
   // ---------- 手書きの undo / redo ----------
@@ -438,7 +433,6 @@
     undoStack.push(currentSnapshot());
     if(undoStack.length>30) undoStack.shift();
     redoStack.length = 0; // 新しい操作をしたらやり直し履歴は破棄
-    updateUndoRedoButtons();
   }
   function restoreSnapshot(entry, onDone){
     if(entry.h > currentSheetHeight){
@@ -457,21 +451,14 @@
     if(undoStack.length===0) return;
     redoStack.push(currentSnapshot());
     const prev = undoStack.pop();
-    restoreSnapshot(prev, ()=>{ scheduleSave(); updateUndoRedoButtons(); });
+    restoreSnapshot(prev, ()=>{ scheduleSave(); });
   }
   function doInkRedo(){
     if(redoStack.length===0) return;
     undoStack.push(currentSnapshot());
     const next = redoStack.pop();
-    restoreSnapshot(next, ()=>{ scheduleSave(); updateUndoRedoButtons(); });
+    restoreSnapshot(next, ()=>{ scheduleSave(); });
   }
-  function updateUndoRedoButtons(){
-    undoBtn.disabled = undoStack.length===0;
-    redoBtn.disabled = redoStack.length===0;
-  }
-  undoBtn.addEventListener('click', doInkUndo);
-  redoBtn.addEventListener('click', doInkRedo);
-  updateUndoRedoButtons();
 
   document.getElementById('clearInk').addEventListener('click', ()=>{
     if(!confirm('手書き部分だけを消去します。よろしいですか？（文字は消えません）')) return;
