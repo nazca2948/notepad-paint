@@ -52,6 +52,64 @@
   }
   #status{font-size:12px;color:#999;min-width:64px;text-align:right;}
 
+  /* ---- タブバー ---- */
+  .tabbar{
+    display:flex;align-items:flex-end;
+    gap:3px;
+    padding:5px 8px 0;
+    background:#e8e8e6;
+    border-bottom:1px solid #d3d3cd;
+    overflow-x:auto;
+    overflow-y:hidden;
+    white-space:nowrap;
+    flex-shrink:0;
+    user-select:none;
+    scrollbar-width:thin;
+  }
+  .tabbar::-webkit-scrollbar{height:4px;}
+  .tab{
+    display:inline-flex;align-items:center;gap:6px;
+    padding:6px 8px 6px 12px;
+    font-size:12px;
+    color:#666;
+    background:#dcdcd8;
+    border:1px solid transparent;
+    border-bottom:none;
+    border-radius:6px 6px 0 0;
+    cursor:pointer;
+    max-width:150px;
+    flex-shrink:0;
+  }
+  .tab.active{
+    background:#fff;
+    color:#222;
+    border-color:#d3d3cd;
+    font-weight:600;
+  }
+  .tab .tab-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .tab .tab-close{
+    flex-shrink:0;
+    width:16px;height:16px;
+    display:flex;align-items:center;justify-content:center;
+    border-radius:3px;
+    color:#999;
+    opacity:0;
+    font-size:13px;
+    line-height:1;
+  }
+  .tab:hover .tab-close, .tab.active .tab-close{opacity:1;}
+  .tab .tab-close:hover{background:#e3e3e3;color:#333;}
+  .tab-add{
+    flex-shrink:0;
+    padding:6px 12px;
+    margin-bottom:0;
+    font-size:15px;
+    color:#777;
+    cursor:pointer;
+    border-radius:6px 6px 0 0;
+  }
+  .tab-add:hover{background:#d3d3cd;color:#333;}
+
   /* ---- 手書きモード時だけ出るツールバー ---- */
   .inkbar{
     display:flex;align-items:center;gap:12px;
@@ -86,6 +144,7 @@
   .textbar input[type=range]{width:120px;}
   .textbar #fontSizeLabel{min-width:34px;display:inline-block;}
   .textbar label{display:flex;align-items:center;gap:5px;cursor:pointer;}
+  .textbar .hint{color:#aaa;}
   .inkbar .group{display:flex;align-items:center;gap:6px;flex-shrink:0;height:100%;}
   .inkbar button.tool{
     border:1px solid transparent;
@@ -130,7 +189,7 @@
     overflow-y:auto;
     overflow-x:hidden;
   }
-  /* .sheet が「紙」そのもの。textareaとcanvasはこの中で同じ座標系に重なる */
+  /* .sheet が「紙」そのもの。textarea・画像・canvasはこの中で同じ座標系に重なる */
   .sheet{
     position:relative;
     width:100%;
@@ -148,6 +207,45 @@
     color:#111;
     background:transparent;
   }
+
+  /* ---- 貼り付けた画像レイヤー（文字の上、手書きの下） ---- */
+  .images-layer{
+    position:absolute;top:0;left:0;right:0;
+    pointer-events:none;
+  }
+  .img-box{
+    position:absolute;
+    pointer-events:auto;
+    touch-action:none;
+  }
+  .img-box img{
+    width:100%;height:100%;
+    display:block;
+    user-select:none;
+    -webkit-user-drag:none;
+    pointer-events:none;
+    box-shadow:0 0 0 1px rgba(0,0,0,0.08);
+  }
+  .img-box.selected img{box-shadow:0 0 0 2px #7ea3f0;}
+  .img-box .img-handle{
+    position:absolute;right:-7px;bottom:-7px;
+    width:14px;height:14px;
+    background:#fff;border:2px solid #7ea3f0;border-radius:50%;
+    cursor:nwse-resize;
+    display:none;
+  }
+  .img-box.selected .img-handle{display:block;}
+  .img-box .img-del{
+    position:absolute;top:-10px;right:-10px;
+    width:20px;height:20px;
+    background:#c0493b;color:#fff;
+    border-radius:50%;
+    font-size:13px;line-height:20px;text-align:center;
+    cursor:pointer;
+    display:none;
+  }
+  .img-box.selected .img-del{display:flex;align-items:center;justify-content:center;}
+
   canvas#ink{
     position:absolute;top:0;left:0;
     pointer-events:none;
@@ -166,6 +264,8 @@
     </div>
   </div>
 
+  <div class="tabbar" id="tabbar"></div>
+
   <div class="textbar" id="textbar">
     <div class="group">
       <span>文字サイズ</span>
@@ -175,6 +275,7 @@
     <div class="group">
       <label><input type="checkbox" id="boldToggle" checked> 太字</label>
     </div>
+    <div class="group hint">画像は Ctrl+V で貼り付け</div>
   </div>
 
   <div class="inkbar hidden" id="inkbar">
@@ -207,6 +308,7 @@
   <div class="editor-wrap" id="wrap">
     <div class="sheet" id="sheet">
       <textarea id="text" spellcheck="false" placeholder=""></textarea>
+      <div class="images-layer" id="imagesLayer"></div>
       <canvas id="ink"></canvas>
     </div>
   </div>
@@ -229,6 +331,8 @@
   const widthInput = document.getElementById('width');
   const gridRowsInput = document.getElementById('gridRows');
   const gridColsInput = document.getElementById('gridCols');
+  const tabbarEl = document.getElementById('tabbar');
+  const imagesLayerEl = document.getElementById('imagesLayer');
 
   let drawMode = false;
   let tool = 'pen';
@@ -240,11 +344,32 @@
   const redoStack = [];
   const DPR = window.devicePixelRatio || 1;
 
-  // 「紙」の現在の高さ（論理px）。手書きとテキストの両方がこの1枚の中で共存し、
-  // wrap全体がスクロールすることで、手書き・文字が常に連動して動く。
+  // ---------- 複数メモ（タブ）の状態 ----------
+  // 各メモは { id, title, text, ink(dataURL), inkW, inkH, fontSize, bold, images:[{id,x,y,w,h,src}] }
+  let notes = [];
+  let activeIndex = 0;
+
+  function genId(){
+    return 'n' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  }
+  function makeEmptyNote(){
+    return {
+      id: genId(),
+      title: null,
+      text: '',
+      ink: null, inkW: 0, inkH: 0,
+      fontSize: 19,
+      bold: true,
+      images: []
+    };
+  }
+
+  // 「紙」の現在の高さ（論理px）。手書き・文字・画像がこの1枚の中で共存し、
+  // wrap全体がスクロールすることで、すべてが常に連動して動く。
   let currentSheetHeight = 0;
 
   // ---------- キャンバス（＝紙）のサイズ変更。既存の絵は伸縮させず、そのままの位置で保持 ----------
+  // （同じメモの中でウィンドウ幅や内容量が変わったときに使う。タブ切り替えには使わない）
   function resizeCanvasTo(newW, newH){
     const curLogicalW = canvas.width ? canvas.width / DPR : 0;
     const curLogicalH = canvas.height ? canvas.height / DPR : 0;
@@ -280,13 +405,46 @@
     resizeCanvasTo(wrap.clientWidth, newHeightLogical);
   }
 
-  // テキストの内容量から必要な高さを測り、足りなければ紙を伸ばす（縮めることはしない）
+  // タブ切り替え専用：前のメモの絵を引き継がず、まっさらな状態からそのメモのinkを読み込む
+  function resetCanvasForNote(note){
+    const targetH = Math.max(note.inkH || 0, wrap.clientHeight);
+    canvas.width = wrap.clientWidth * DPR;
+    canvas.height = targetH * DPR;
+    canvas.style.width = wrap.clientWidth + 'px';
+    canvas.style.height = targetH + 'px';
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.scale(DPR, DPR);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.clearRect(0, 0, wrap.clientWidth, targetH);
+    currentSheetHeight = targetH;
+    sheet.style.height = targetH + 'px';
+
+    if(note.ink){
+      return new Promise((resolve)=>{
+        const img = new Image();
+        img.onload = ()=>{
+          ctx.drawImage(img, 0, 0, note.inkW || wrap.clientWidth, note.inkH || targetH);
+          resolve();
+        };
+        img.onerror = resolve;
+        img.src = note.ink;
+      });
+    }
+    return Promise.resolve();
+  }
+
+  // テキスト・画像の内容量から必要な高さを測り、足りなければ紙を伸ばす（縮めることはしない）
   function measureAndGrow(){
     const prevHeight = textEl.style.height;
     textEl.style.height = 'auto';
     const contentH = textEl.scrollHeight;
     textEl.style.height = prevHeight || '100%';
-    const desired = Math.max(contentH + 20, wrap.clientHeight, currentSheetHeight);
+    let desired = Math.max(contentH + 20, wrap.clientHeight, currentSheetHeight);
+    const note = notes[activeIndex];
+    if(note){
+      note.images.forEach(im=>{ desired = Math.max(desired, im.y + im.h + 40); });
+    }
     growCanvasTo(desired);
     textEl.style.height = '100%';
   }
@@ -316,6 +474,7 @@
     canvas.classList.toggle('draw-line', on && tool==='line');
     canvas.classList.toggle('draw-grid', on && tool==='grid');
     textEl.readOnly = on;
+    if(on) deselectAllImages();
     if(!on) textEl.focus();
   }
   toggleBtn.addEventListener('click', ()=>setDrawMode(!drawMode));
@@ -358,25 +517,336 @@
     scheduleSave();
   });
 
+  // ---------- タブ（複数メモ）のUI ----------
+  function tabTitle(note, idx){
+    if(note.title) return note.title;
+    const firstLine = (note.text || '').split('\n')[0].trim();
+    if(!firstLine) return `メモ${idx+1}`;
+    return firstLine.length > 10 ? firstLine.slice(0,10) + '…' : firstLine;
+  }
+
+  function renderTabs(){
+    tabbarEl.innerHTML = '';
+    notes.forEach((note, i)=>{
+      const tab = document.createElement('div');
+      tab.className = 'tab' + (i===activeIndex ? ' active' : '');
+      tab.dataset.index = i;
+
+      const label = document.createElement('span');
+      label.className = 'tab-title';
+      label.textContent = tabTitle(note, i);
+      tab.appendChild(label);
+
+      const close = document.createElement('span');
+      close.className = 'tab-close';
+      close.textContent = '×';
+      close.title = 'このタブを削除';
+      close.addEventListener('click', (e)=>{ e.stopPropagation(); deleteTab(i); });
+      tab.appendChild(close);
+
+      tab.addEventListener('click', ()=> switchTab(i));
+      tab.addEventListener('dblclick', ()=> renameTab(i));
+
+      tabbarEl.appendChild(tab);
+    });
+
+    const addBtn = document.createElement('div');
+    addBtn.className = 'tab-add';
+    addBtn.textContent = '＋';
+    addBtn.title = '新しいメモ';
+    addBtn.addEventListener('click', addTab);
+    tabbarEl.appendChild(addBtn);
+  }
+
+  function updateActiveTabLabel(){
+    const el = tabbarEl.querySelector(`.tab[data-index="${activeIndex}"] .tab-title`);
+    if(el) el.textContent = tabTitle(notes[activeIndex], activeIndex);
+  }
+
+  function renameTab(i){
+    const note = notes[i];
+    const current = note.title || tabTitle(note, i);
+    const name = prompt('タブの名前', current);
+    if(name === null) return;
+    note.title = name.trim() || null;
+    renderTabs();
+    scheduleSave();
+  }
+
+  function saveActiveNoteState(){
+    const note = notes[activeIndex];
+    if(!note) return;
+    note.text = textEl.value;
+    note.fontSize = parseInt(fontSizeInput.value, 10);
+    note.bold = boldToggle.checked;
+    note.ink = canvas.toDataURL('image/png');
+    note.inkW = Math.round(canvas.width / DPR);
+    note.inkH = Math.round(canvas.height / DPR);
+    // note.images はドラッグ・リサイズのたびに直接更新されているのでここでは不要
+  }
+
+  async function loadNoteIntoUI(index){
+    const note = notes[index];
+    textEl.value = note.text || '';
+    fontSizeInput.value = note.fontSize || 19;
+    applyFontSize(fontSizeInput.value);
+    boldToggle.checked = (note.bold !== false);
+    applyBold(boldToggle.checked);
+    undoStack.length = 0;
+    redoStack.length = 0;
+
+    await resetCanvasForNote(note);
+    renderImagesLayer(note);
+    measureAndGrow();
+    wrap.scrollTop = 0;
+  }
+
+  async function switchTab(i){
+    if(i === activeIndex) return;
+    saveActiveNoteState();
+    activeIndex = i;
+    await loadNoteIntoUI(activeIndex);
+    renderTabs();
+    scheduleSave();
+  }
+
+  async function addTab(){
+    saveActiveNoteState();
+    notes.push(makeEmptyNote());
+    activeIndex = notes.length - 1;
+    await loadNoteIntoUI(activeIndex);
+    renderTabs();
+    scheduleSave();
+    textEl.focus();
+  }
+
+  async function deleteTab(i){
+    if(notes.length <= 1){
+      if(!confirm('最後のタブです。内容をすべて消去しますか？')) return;
+      notes[0] = makeEmptyNote();
+      activeIndex = 0;
+      await loadNoteIntoUI(0);
+      renderTabs();
+      scheduleSave();
+      return;
+    }
+    if(!confirm('このタブを削除しますか？')) return;
+    const deletingActive = (i === activeIndex);
+    notes.splice(i, 1);
+    if(deletingActive){
+      activeIndex = Math.min(i, notes.length - 1);
+      await loadNoteIntoUI(activeIndex);
+    } else if(i < activeIndex){
+      activeIndex -= 1;
+    }
+    renderTabs();
+    scheduleSave();
+  }
+
+  // ---------- 貼り付け画像（サイズ調整可能） ----------
+  function fileToDataURL(file){
+    return new Promise((resolve, reject)=>{
+      const r = new FileReader();
+      r.onload = ()=> resolve(r.result);
+      r.onerror = reject;
+      r.readAsDataURL(file);
+    });
+  }
+  function getImageDims(dataUrl){
+    return new Promise((resolve)=>{
+      const img = new Image();
+      img.onload = ()=> resolve({ w: img.naturalWidth, h: img.naturalHeight });
+      img.onerror = ()=> resolve({ w: 300, h: 200 });
+      img.src = dataUrl;
+    });
+  }
+
+  function renderImagesLayer(note){
+    imagesLayerEl.innerHTML = '';
+    (note.images || []).forEach(im => createImageBoxEl(im));
+  }
+
+  function createImageBoxEl(imgData){
+    const box = document.createElement('div');
+    box.className = 'img-box';
+    box.dataset.id = imgData.id;
+    box.style.left = imgData.x + 'px';
+    box.style.top = imgData.y + 'px';
+    box.style.width = imgData.w + 'px';
+    box.style.height = imgData.h + 'px';
+
+    const imgEl = document.createElement('img');
+    imgEl.src = imgData.src;
+    imgEl.draggable = false;
+    box.appendChild(imgEl);
+
+    const delBtn = document.createElement('div');
+    delBtn.className = 'img-del';
+    delBtn.textContent = '×';
+    delBtn.title = '画像を削除';
+    delBtn.addEventListener('pointerdown', e=> e.stopPropagation());
+    delBtn.addEventListener('click', (e)=>{ e.stopPropagation(); removeImage(imgData.id); });
+    box.appendChild(delBtn);
+
+    const handle = document.createElement('div');
+    handle.className = 'img-handle';
+    box.appendChild(handle);
+
+    box.addEventListener('pointerdown', (e)=>{
+      selectImageBox(box);
+      if(e.target === handle){
+        startResize(e, box, imgData);
+      } else if(e.target !== delBtn){
+        startMove(e, box, imgData);
+      }
+    });
+
+    imagesLayerEl.appendChild(box);
+    return box;
+  }
+
+  function selectImageBox(box){
+    deselectAllImages();
+    box.classList.add('selected');
+  }
+  function deselectAllImages(){
+    imagesLayerEl.querySelectorAll('.img-box.selected').forEach(b=> b.classList.remove('selected'));
+  }
+  document.addEventListener('pointerdown', (e)=>{
+    if(!e.target.closest || !e.target.closest('.img-box')){
+      deselectAllImages();
+    }
+  }, true);
+
+  function startMove(e, box, imgData){
+    e.preventDefault();
+    box.setPointerCapture(e.pointerId);
+    const startX = e.clientX, startY = e.clientY;
+    const origX = imgData.x, origY = imgData.y;
+    function onMove(ev){
+      const dx = ev.clientX - startX, dy = ev.clientY - startY;
+      let nx = origX + dx, ny = origY + dy;
+      nx = Math.max(0, Math.min(nx, Math.max(0, wrap.clientWidth - imgData.w)));
+      ny = Math.max(0, ny);
+      imgData.x = nx; imgData.y = ny;
+      box.style.left = nx + 'px';
+      box.style.top = ny + 'px';
+      measureAndGrow();
+    }
+    function onUp(){
+      box.removeEventListener('pointermove', onMove);
+      box.removeEventListener('pointerup', onUp);
+      scheduleSave();
+    }
+    box.addEventListener('pointermove', onMove);
+    box.addEventListener('pointerup', onUp);
+  }
+
+  function startResize(e, box, imgData){
+    e.preventDefault();
+    e.stopPropagation();
+    box.setPointerCapture(e.pointerId);
+    const startX = e.clientX, startY = e.clientY;
+    const origW = imgData.w, origH = imgData.h;
+    const aspect = origW / (origH || 1);
+    function onMove(ev){
+      const dx = ev.clientX - startX;
+      let newW = Math.max(30, origW + dx);
+      newW = Math.min(newW, Math.max(30, wrap.clientWidth - imgData.x));
+      let newH;
+      if(ev.shiftKey){
+        const dy = ev.clientY - startY;
+        newH = Math.max(30, origH + dy);
+      } else {
+        newH = newW / aspect;
+      }
+      imgData.w = newW; imgData.h = newH;
+      box.style.width = newW + 'px';
+      box.style.height = newH + 'px';
+      measureAndGrow();
+    }
+    function onUp(){
+      box.removeEventListener('pointermove', onMove);
+      box.removeEventListener('pointerup', onUp);
+      scheduleSave();
+    }
+    box.addEventListener('pointermove', onMove);
+    box.addEventListener('pointerup', onUp);
+  }
+
+  function removeImage(id){
+    const note = notes[activeIndex];
+    const idx = note.images.findIndex(im => im.id === id);
+    if(idx >= 0) note.images.splice(idx, 1);
+    const box = imagesLayerEl.querySelector(`.img-box[data-id="${id}"]`);
+    if(box) box.remove();
+    scheduleSave();
+  }
+
+  async function addImageToNote(dataUrl, dims){
+    const wrapW = wrap.clientWidth;
+    const maxW = Math.min(wrapW - 40, 480);
+    let w = dims.w, h = dims.h;
+    if(w > maxW){
+      h = h * (maxW / w);
+      w = maxW;
+    }
+    const scrollTop = wrap.scrollTop;
+    const x = 20;
+    const y = scrollTop + 20;
+    const note = notes[activeIndex];
+    const imgData = { id: genId(), x, y, w, h, src: dataUrl };
+    note.images.push(imgData);
+    createImageBoxEl(imgData);
+    measureAndGrow();
+    selectImageBox(imagesLayerEl.querySelector(`.img-box[data-id="${imgData.id}"]`));
+    scheduleSave();
+  }
+
+  window.addEventListener('paste', async (e)=>{
+    if(!e.clipboardData) return;
+    const items = e.clipboardData.items;
+    let imageFile = null;
+    for(const item of items){
+      if(item.kind === 'file' && item.type && item.type.startsWith('image/')){
+        imageFile = item.getAsFile();
+        break;
+      }
+    }
+    if(!imageFile) return; // 画像でなければ通常のテキスト貼り付けに任せる
+    e.preventDefault();
+    try{
+      const dataUrl = await fileToDataURL(imageFile);
+      const dims = await getImageDims(dataUrl);
+      await addImageToNote(dataUrl, dims);
+    }catch(err){
+      console.error('image paste failed', err);
+    }
+  });
+
+  window.addEventListener('keydown', (e)=>{
+    if(e.key === 'Delete' || e.key === 'Backspace'){
+      const sel = imagesLayerEl.querySelector('.img-box.selected');
+      if(sel && document.activeElement !== textEl){
+        e.preventDefault();
+        removeImage(sel.dataset.id);
+      }
+    }
+  });
+
   // ---------- 保存・読み込み（localStorage） ----------
-  const STORAGE_KEY = 'notepad-data';
+  const STORAGE_KEY = 'notepad-data-v2';
+  const LEGACY_KEY = 'notepad-data';
   let saveTimer = null;
   function scheduleSave(){
     statusEl.textContent = '保存中…';
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(doSave, 700);
+    saveTimer = setTimeout(doSaveAll, 700);
   }
-  function doSave(){
+  function doSaveAll(){
+    saveActiveNoteState();
     try{
-      const payload = {
-        text: textEl.value,
-        ink: canvas.toDataURL('image/png'),
-        inkW: Math.round(canvas.width / DPR),
-        inkH: Math.round(canvas.height / DPR),
-        fontSize: parseInt(fontSizeInput.value, 10),
-        bold: boldToggle.checked
-      };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ notes, activeIndex }));
       statusEl.textContent = '保存済み';
     }catch(e){
       console.error('save failed', e);
@@ -385,43 +855,58 @@
   }
   textEl.addEventListener('input', ()=>{
     measureAndGrow();
+    updateActiveTabLabel();
     scheduleSave();
   });
 
-  async function loadNote(){
+  async function loadAll(){
     try{
       const raw = localStorage.getItem(STORAGE_KEY);
       if(raw){
         const data = JSON.parse(raw);
-        textEl.value = data.text || '';
-        if(data.fontSize){
-          fontSizeInput.value = data.fontSize;
-          applyFontSize(data.fontSize);
+        if(data && Array.isArray(data.notes) && data.notes.length){
+          notes = data.notes.map(n=>({
+            id: n.id || genId(),
+            title: n.title || null,
+            text: n.text || '',
+            ink: n.ink || null,
+            inkW: n.inkW || 0,
+            inkH: n.inkH || 0,
+            fontSize: n.fontSize || 19,
+            bold: n.bold !== false,
+            images: Array.isArray(n.images) ? n.images : []
+          }));
+          activeIndex = Math.min(Math.max(data.activeIndex || 0, 0), notes.length - 1);
         }
-        if(typeof data.bold === 'boolean'){
-          boldToggle.checked = data.bold;
-          applyBold(data.bold);
-        }
-        // 保存されていたテキストの分だけ先に紙を伸ばしてから、手書きを重ねる
-        measureAndGrow();
-        if(data.ink){
-          const savedH = data.inkH || currentSheetHeight;
-          const savedW = data.inkW || wrap.clientWidth;
-          growCanvasTo(savedH);
-          await new Promise((resolve)=>{
-            const img = new Image();
-            img.onload = ()=>{
-              ctx.drawImage(img, 0, 0, savedW, savedH);
-              resolve();
-            };
-            img.onerror = resolve;
-            img.src = data.ink;
-          });
+      } else {
+        // 旧バージョン（タブなし）のデータがあれば1つ目のタブとして引き継ぐ
+        const oldRaw = localStorage.getItem(LEGACY_KEY);
+        if(oldRaw){
+          const old = JSON.parse(oldRaw);
+          notes = [{
+            id: genId(), title: null,
+            text: old.text || '',
+            ink: old.ink || null,
+            inkW: old.inkW || 0,
+            inkH: old.inkH || 0,
+            fontSize: old.fontSize || 19,
+            bold: old.bold !== false,
+            images: []
+          }];
+          activeIndex = 0;
         }
       }
     }catch(e){
-      // 保存データがまだ無い
+      console.warn('load failed, starting fresh', e);
     }
+
+    if(notes.length === 0){
+      notes = [makeEmptyNote()];
+      activeIndex = 0;
+    }
+
+    renderTabs();
+    await loadNoteIntoUI(activeIndex);
     statusEl.textContent = '保存済み';
   }
 
@@ -461,7 +946,7 @@
   }
 
   document.getElementById('clearInk').addEventListener('click', ()=>{
-    if(!confirm('手書き部分だけを消去します。よろしいですか？（文字は消えません）')) return;
+    if(!confirm('手書き部分だけを消去します。よろしいですか？（文字・画像は消えません）')) return;
     pushUndo();
     ctx.clearRect(0,0,wrap.clientWidth,currentSheetHeight);
     scheduleSave();
@@ -594,7 +1079,7 @@
   canvas.addEventListener('pointercancel', endStroke);
   canvas.addEventListener('pointerleave', ()=>{ if(isDrawing) endStroke(); });
 
-  loadNote();
+  loadAll();
 })();
 
 // ---------- Service Worker登録（オフライン対応） ----------
