@@ -422,13 +422,15 @@
 
     if(note.ink){
       return new Promise((resolve)=>{
+        const url = URL.createObjectURL(note.ink);
         const img = new Image();
         img.onload = ()=>{
           ctx.drawImage(img, 0, 0, note.inkW || wrap.clientWidth, note.inkH || targetH);
+          URL.revokeObjectURL(url);
           resolve();
         };
-        img.onerror = resolve;
-        img.src = note.ink;
+        img.onerror = ()=>{ URL.revokeObjectURL(url); resolve(); };
+        img.src = url;
       });
     }
     return Promise.resolve();
@@ -573,13 +575,19 @@
     scheduleSave();
   }
 
-  function saveActiveNoteState(){
+  function canvasToBlob(){
+    return new Promise((resolve)=>{
+      canvas.toBlob((blob)=> resolve(blob), 'image/png');
+    });
+  }
+
+  async function saveActiveNoteState(){
     const note = notes[activeIndex];
     if(!note) return;
     note.text = textEl.value;
     note.fontSize = parseInt(fontSizeInput.value, 10);
     note.bold = boldToggle.checked;
-    note.ink = canvas.toDataURL('image/png');
+    note.ink = await canvasToBlob(); // Blobとして保存（base64にしないぶん軽い）
     note.inkW = Math.round(canvas.width / DPR);
     note.inkH = Math.round(canvas.height / DPR);
     // note.images はドラッグ・リサイズのたびに直接更新されているのでここでは不要
@@ -603,7 +611,7 @@
 
   async function switchTab(i){
     if(i === activeIndex) return;
-    saveActiveNoteState();
+    await saveActiveNoteState();
     activeIndex = i;
     await loadNoteIntoUI(activeIndex);
     renderTabs();
@@ -611,7 +619,7 @@
   }
 
   async function addTab(){
-    saveActiveNoteState();
+    await saveActiveNoteState();
     notes.push(makeEmptyNote());
     activeIndex = notes.length - 1;
     await loadNoteIntoUI(activeIndex);
@@ -644,24 +652,33 @@
   }
 
   // ---------- 貼り付け画像（サイズ調整可能） ----------
-  function fileToDataURL(file){
-    return new Promise((resolve, reject)=>{
-      const r = new FileReader();
-      r.onload = ()=> resolve(r.result);
-      r.onerror = reject;
-      r.readAsDataURL(file);
-    });
+  // note.images[].src は Blob として保持する（base64より約27%軽い＆IndexedDB向き）。
+  // 表示するときだけ URL.createObjectURL() で一時URLを作り、使い終わったら revoke する。
+  function dataURLtoBlob(dataUrl){
+    return fetch(dataUrl).then(r=> r.blob());
   }
-  function getImageDims(dataUrl){
+  async function getImageDimsFromBlob(blob){
+    if('createImageBitmap' in window){
+      try{
+        const bmp = await createImageBitmap(blob);
+        const dims = { w: bmp.width, h: bmp.height };
+        if(bmp.close) bmp.close();
+        return dims;
+      }catch(e){ /* フォールバックへ */ }
+    }
     return new Promise((resolve)=>{
+      const url = URL.createObjectURL(blob);
       const img = new Image();
-      img.onload = ()=> resolve({ w: img.naturalWidth, h: img.naturalHeight });
-      img.onerror = ()=> resolve({ w: 300, h: 200 });
-      img.src = dataUrl;
+      img.onload = ()=>{ URL.revokeObjectURL(url); resolve({ w: img.naturalWidth, h: img.naturalHeight }); };
+      img.onerror = ()=>{ URL.revokeObjectURL(url); resolve({ w: 300, h: 200 }); };
+      img.src = url;
     });
   }
 
   function renderImagesLayer(note){
+    imagesLayerEl.querySelectorAll('img').forEach(img=>{
+      if(img._objectUrl) URL.revokeObjectURL(img._objectUrl);
+    });
     imagesLayerEl.innerHTML = '';
     (note.images || []).forEach(im => createImageBoxEl(im));
   }
@@ -676,7 +693,9 @@
     box.style.height = imgData.h + 'px';
 
     const imgEl = document.createElement('img');
-    imgEl.src = imgData.src;
+    const objectUrl = URL.createObjectURL(imgData.src);
+    imgEl.src = objectUrl;
+    imgEl._objectUrl = objectUrl;
     imgEl.draggable = false;
     box.appendChild(imgEl);
 
@@ -779,11 +798,15 @@
     const idx = note.images.findIndex(im => im.id === id);
     if(idx >= 0) note.images.splice(idx, 1);
     const box = imagesLayerEl.querySelector(`.img-box[data-id="${id}"]`);
-    if(box) box.remove();
+    if(box){
+      const img = box.querySelector('img');
+      if(img && img._objectUrl) URL.revokeObjectURL(img._objectUrl);
+      box.remove();
+    }
     scheduleSave();
   }
 
-  async function addImageToNote(dataUrl, dims){
+  async function addImageToNote(blob, dims){
     const wrapW = wrap.clientWidth;
     const maxW = Math.min(wrapW - 40, 480);
     let w = dims.w, h = dims.h;
@@ -795,7 +818,7 @@
     const x = 20;
     const y = scrollTop + 20;
     const note = notes[activeIndex];
-    const imgData = { id: genId(), x, y, w, h, src: dataUrl };
+    const imgData = { id: genId(), x, y, w, h, src: blob };
     note.images.push(imgData);
     createImageBoxEl(imgData);
     measureAndGrow();
@@ -816,9 +839,8 @@
     if(!imageFile) return; // 画像でなければ通常のテキスト貼り付けに任せる
     e.preventDefault();
     try{
-      const dataUrl = await fileToDataURL(imageFile);
-      const dims = await getImageDims(dataUrl);
-      await addImageToNote(dataUrl, dims);
+      const dims = await getImageDimsFromBlob(imageFile);
+      await addImageToNote(imageFile, dims); // File(Blob)のまま保存
     }catch(err){
       console.error('image paste failed', err);
     }
@@ -834,20 +856,64 @@
     }
   });
 
-  // ---------- 保存・読み込み（localStorage） ----------
-  const STORAGE_KEY = 'notepad-data-v2';
-  const LEGACY_KEY = 'notepad-data';
+  // ---------- 保存・読み込み（IndexedDB） ----------
+  // localStorageよりずっと大きい容量（ブラウザの空き容量次第で数百MB〜）が使え、
+  // 画像もbase64にせずBlobのまま保存できるので容量効率も良い。
+  const DB_NAME = 'notepad-paint-db';
+  const DB_VERSION = 1;
+  const STORE_NAME = 'appState';
+  const STATE_KEY = 'main';
+  const idbAvailable = ('indexedDB' in window);
+
+  let dbPromise = null;
+  function openDB(){
+    if(!dbPromise){
+      dbPromise = new Promise((resolve, reject)=>{
+        const req = indexedDB.open(DB_NAME, DB_VERSION);
+        req.onupgradeneeded = (e)=>{
+          const db = e.target.result;
+          if(!db.objectStoreNames.contains(STORE_NAME)){
+            db.createObjectStore(STORE_NAME);
+          }
+        };
+        req.onsuccess = ()=> resolve(req.result);
+        req.onerror = ()=> reject(req.error);
+      });
+    }
+    return dbPromise;
+  }
+  async function idbGet(key){
+    const db = await openDB();
+    return new Promise((resolve, reject)=>{
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const req = tx.objectStore(STORE_NAME).get(key);
+      req.onsuccess = ()=> resolve(req.result);
+      req.onerror = ()=> reject(req.error);
+    });
+  }
+  async function idbSet(key, value){
+    const db = await openDB();
+    return new Promise((resolve, reject)=>{
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).put(value, key);
+      tx.oncomplete = ()=> resolve();
+      tx.onerror = ()=> reject(tx.error);
+    });
+  }
+
   let saveTimer = null;
   function scheduleSave(){
+    if(!idbAvailable){ statusEl.textContent = '保存非対応のブラウザです'; return; }
     statusEl.textContent = '保存中…';
     clearTimeout(saveTimer);
     saveTimer = setTimeout(doSaveAll, 700);
   }
-  function doSaveAll(){
-    saveActiveNoteState();
+  async function doSaveAll(){
     try{
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ notes, activeIndex }));
+      await saveActiveNoteState();
+      await idbSet(STATE_KEY, { notes, activeIndex, updatedAt: Date.now() });
       statusEl.textContent = '保存済み';
+      updateUsageLabel();
     }catch(e){
       console.error('save failed', e);
       statusEl.textContent = '保存エラー（容量不足の可能性）';
@@ -859,48 +925,104 @@
     scheduleSave();
   });
 
-  async function loadAll(){
+  // 使用容量の目安をstatusのツールチップに表示（対応ブラウザのみ）
+  async function updateUsageLabel(){
     try{
-      const raw = localStorage.getItem(STORAGE_KEY);
+      if(navigator.storage && navigator.storage.estimate){
+        const est = await navigator.storage.estimate();
+        const usedMB = (est.usage / 1024 / 1024).toFixed(1);
+        const quotaMB = est.quota ? (est.quota / 1024 / 1024).toFixed(0) : '?';
+        statusEl.title = `使用容量: 約${usedMB}MB / 上限目安 約${quotaMB}MB`;
+      }
+    }catch(e){ /* 非対応ブラウザは無視 */ }
+  }
+
+  // 旧バージョン（localStorage保存）のデータが残っていればIndexedDBへ一度だけ引き継ぐ
+  async function migrateFromLocalStorageIfNeeded(){
+    let migratedNotes = null;
+    let migratedActive = 0;
+    try{
+      const raw = localStorage.getItem('notepad-data-v2');
       if(raw){
         const data = JSON.parse(raw);
         if(data && Array.isArray(data.notes) && data.notes.length){
-          notes = data.notes.map(n=>({
+          migratedNotes = await Promise.all(data.notes.map(async n=>({
             id: n.id || genId(),
             title: n.title || null,
             text: n.text || '',
-            ink: n.ink || null,
+            ink: n.ink ? await dataURLtoBlob(n.ink) : null,
             inkW: n.inkW || 0,
             inkH: n.inkH || 0,
             fontSize: n.fontSize || 19,
             bold: n.bold !== false,
-            images: Array.isArray(n.images) ? n.images : []
-          }));
-          activeIndex = Math.min(Math.max(data.activeIndex || 0, 0), notes.length - 1);
+            images: n.images ? await Promise.all(n.images.map(async im=>({
+              id: im.id || genId(), x: im.x, y: im.y, w: im.w, h: im.h,
+              src: await dataURLtoBlob(im.src)
+            }))) : []
+          })));
+          migratedActive = Math.min(Math.max(data.activeIndex || 0, 0), migratedNotes.length - 1);
         }
       } else {
-        // 旧バージョン（タブなし）のデータがあれば1つ目のタブとして引き継ぐ
-        const oldRaw = localStorage.getItem(LEGACY_KEY);
+        const oldRaw = localStorage.getItem('notepad-data');
         if(oldRaw){
           const old = JSON.parse(oldRaw);
-          notes = [{
+          migratedNotes = [{
             id: genId(), title: null,
             text: old.text || '',
-            ink: old.ink || null,
+            ink: old.ink ? await dataURLtoBlob(old.ink) : null,
             inkW: old.inkW || 0,
             inkH: old.inkH || 0,
             fontSize: old.fontSize || 19,
             bold: old.bold !== false,
             images: []
           }];
-          activeIndex = 0;
+          migratedActive = 0;
         }
+      }
+    }catch(e){ console.warn('migration failed', e); }
+
+    if(migratedNotes){
+      const state = { notes: migratedNotes, activeIndex: migratedActive, updatedAt: Date.now() };
+      await idbSet(STATE_KEY, state);
+      try{
+        localStorage.removeItem('notepad-data-v2');
+        localStorage.removeItem('notepad-data');
+      }catch(e){ /* 無視 */ }
+      return state;
+    }
+    return null;
+  }
+
+  async function loadAll(){
+    if(!idbAvailable){
+      notes = [makeEmptyNote()];
+      activeIndex = 0;
+      renderTabs();
+      await loadNoteIntoUI(activeIndex);
+      statusEl.textContent = '保存非対応のブラウザです';
+      return;
+    }
+
+    try{
+      if(navigator.storage && navigator.storage.persist){
+        navigator.storage.persist().catch(()=>{});
+      }
+    }catch(e){ /* 無視 */ }
+
+    let state = null;
+    try{
+      state = await idbGet(STATE_KEY);
+      if(!state){
+        state = await migrateFromLocalStorageIfNeeded();
       }
     }catch(e){
       console.warn('load failed, starting fresh', e);
     }
 
-    if(notes.length === 0){
+    if(state && Array.isArray(state.notes) && state.notes.length){
+      notes = state.notes;
+      activeIndex = Math.min(Math.max(state.activeIndex || 0, 0), notes.length - 1);
+    } else {
       notes = [makeEmptyNote()];
       activeIndex = 0;
     }
@@ -908,6 +1030,7 @@
     renderTabs();
     await loadNoteIntoUI(activeIndex);
     statusEl.textContent = '保存済み';
+    updateUsageLabel();
   }
 
   // ---------- 手書きの undo / redo ----------
