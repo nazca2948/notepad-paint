@@ -188,6 +188,8 @@
     flex:1;
     overflow-y:auto;
     overflow-x:hidden;
+    /* スクロールバーの有無で幅が変わらないよう、常にスクロールバー分の領域を確保する */
+    scrollbar-gutter:stable;
   }
   /* .sheet が「紙」そのもの。textarea・画像・canvasはこの中で同じ座標系に重なる */
   .sheet{
@@ -345,9 +347,11 @@
   const DPR = window.devicePixelRatio || 1;
 
   // ---------- 複数メモ（タブ）の状態 ----------
-  // 各メモは { id, title, text, ink(dataURL), inkW, inkH, fontSize, bold, images:[{id,x,y,w,h,src}] }
+  // 各メモは { id, title, text, ink(Blob), inkW, inkH, inkDPR, fontSize, bold, images:[{id,x,y,w,h,src}] }
   let notes = [];
   let activeIndex = 0;
+  // タブ切り替え・追加・削除の途中（キャンバスが読み込み途中）かどうか。この間は自動保存しない
+  let busy = false;
 
   function genId(){
     return 'n' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -357,7 +361,7 @@
       id: genId(),
       title: null,
       text: '',
-      ink: null, inkW: 0, inkH: 0,
+      ink: null, inkW: 0, inkH: 0, inkDPR: DPR,
       fontSize: 19,
       bold: true,
       images: []
@@ -368,12 +372,43 @@
   // wrap全体がスクロールすることで、すべてが常に連動して動く。
   let currentSheetHeight = 0;
 
+  // ---------- キャンバス全体のコピー・消去 ----------
+  // 拡大縮小で絵がずれないよう、変換を外して「実ピクセル同士で1:1」でコピーする。
+  // （以前は wrap.clientWidth を描画先の幅にしていたため、キャンバスの実際の幅と
+  //   少しでも違うと、そのたびに絵が横に引き伸ばされていた）
+  function clearInkCanvas(){
+    ctx.save();
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.restore();
+  }
+  function blitToInk(src){
+    ctx.save();
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(src, 0, 0);
+    ctx.restore();
+  }
+  function setCanvasPhysicalSize(pw, ph){
+    canvas.width = pw;
+    canvas.height = ph;
+    canvas.style.width = (pw / DPR) + 'px';
+    canvas.style.height = (ph / DPR) + 'px';
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.scale(DPR, DPR);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    currentSheetHeight = ph / DPR;
+    sheet.style.height = currentSheetHeight + 'px';
+  }
+
   // ---------- キャンバス（＝紙）のサイズ変更。既存の絵は伸縮させず、そのままの位置で保持 ----------
-  // （同じメモの中でウィンドウ幅や内容量が変わったときに使う。タブ切り替えには使わない）
+  // 幅は狭めない（ウィンドウを狭めたときに右側の手書きが切り取られて消えるのを防ぐ）。
   function resizeCanvasTo(newW, newH){
-    const curLogicalW = canvas.width ? canvas.width / DPR : 0;
-    const curLogicalH = canvas.height ? canvas.height / DPR : 0;
-    if(Math.round(curLogicalW) === Math.round(newW) && Math.round(curLogicalH) === Math.round(newH)) return;
+    const pw = Math.max(Math.round(newW * DPR), canvas.width);
+    const ph = Math.round(newH * DPR);
+    if(pw === canvas.width && ph === canvas.height) return;
 
     let backup = null;
     if(canvas.width > 0 && canvas.height > 0){
@@ -383,21 +418,8 @@
       backup.getContext('2d').drawImage(canvas, 0, 0);
     }
 
-    canvas.width = newW * DPR;
-    canvas.height = newH * DPR;
-    canvas.style.width = newW + 'px';
-    canvas.style.height = newH + 'px';
-    ctx.setTransform(1,0,0,1,0,0);
-    ctx.scale(DPR, DPR);
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-
-    if(backup && curLogicalW > 0 && curLogicalH > 0){
-      ctx.drawImage(backup, 0, 0, curLogicalW, curLogicalH);
-    }
-
-    currentSheetHeight = newH;
-    sheet.style.height = newH + 'px';
+    setCanvasPhysicalSize(pw, ph);
+    if(backup) blitToInk(backup);
   }
 
   function growCanvasTo(newHeightLogical){
@@ -407,25 +429,24 @@
 
   // タブ切り替え専用：前のメモの絵を引き継がず、まっさらな状態からそのメモのinkを読み込む
   function resetCanvasForNote(note){
+    const inkDPR = note.inkDPR || DPR;
+    const targetW = Math.max(note.inkW || 0, wrap.clientWidth);
     const targetH = Math.max(note.inkH || 0, wrap.clientHeight);
-    canvas.width = wrap.clientWidth * DPR;
-    canvas.height = targetH * DPR;
-    canvas.style.width = wrap.clientWidth + 'px';
-    canvas.style.height = targetH + 'px';
-    ctx.setTransform(1,0,0,1,0,0);
-    ctx.scale(DPR, DPR);
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.clearRect(0, 0, wrap.clientWidth, targetH);
-    currentSheetHeight = targetH;
-    sheet.style.height = targetH + 'px';
+    setCanvasPhysicalSize(Math.round(targetW * DPR), Math.round(targetH * DPR));
+    clearInkCanvas();
 
     if(note.ink){
       return new Promise((resolve)=>{
         const url = URL.createObjectURL(note.ink);
         const img = new Image();
         img.onload = ()=>{
-          ctx.drawImage(img, 0, 0, note.inkW || wrap.clientWidth, note.inkH || targetH);
+          if(inkDPR === DPR){
+            blitToInk(img); // 保存時と同じ倍率なら実ピクセルのままコピー
+          } else {
+            // 別の倍率のモニターで保存したものは論理サイズを合わせて描く
+            ctx.globalCompositeOperation = 'source-over';
+            ctx.drawImage(img, 0, 0, img.naturalWidth / inkDPR, img.naturalHeight / inkDPR);
+          }
           URL.revokeObjectURL(url);
           resolve();
         };
@@ -588,8 +609,9 @@
     note.fontSize = parseInt(fontSizeInput.value, 10);
     note.bold = boldToggle.checked;
     note.ink = await canvasToBlob(); // Blobとして保存（base64にしないぶん軽い）
-    note.inkW = Math.round(canvas.width / DPR);
-    note.inkH = Math.round(canvas.height / DPR);
+    note.inkW = canvas.width / DPR;
+    note.inkH = canvas.height / DPR;
+    note.inkDPR = DPR;
     // note.images はドラッグ・リサイズのたびに直接更新されているのでここでは不要
   }
 
@@ -609,46 +631,62 @@
     wrap.scrollTop = 0;
   }
 
-  async function switchTab(i){
+  // タブ操作中は自動保存を止め、終わってから保存し直す
+  async function runTabOp(fn){
+    if(busy) return;
+    busy = true;
+    clearTimeout(saveTimer);
+    try{
+      await fn();
+    } finally {
+      busy = false;
+    }
+    scheduleSave();
+  }
+
+  function switchTab(i){
     if(i === activeIndex) return;
-    await saveActiveNoteState();
-    activeIndex = i;
-    await loadNoteIntoUI(activeIndex);
-    renderTabs();
-    scheduleSave();
+    return runTabOp(async ()=>{
+      await saveActiveNoteState();
+      activeIndex = i;
+      await loadNoteIntoUI(activeIndex);
+      renderTabs();
+    });
   }
 
-  async function addTab(){
-    await saveActiveNoteState();
-    notes.push(makeEmptyNote());
-    activeIndex = notes.length - 1;
-    await loadNoteIntoUI(activeIndex);
-    renderTabs();
-    scheduleSave();
-    textEl.focus();
+  function addTab(){
+    return runTabOp(async ()=>{
+      await saveActiveNoteState();
+      notes.push(makeEmptyNote());
+      activeIndex = notes.length - 1;
+      await loadNoteIntoUI(activeIndex);
+      renderTabs();
+      textEl.focus();
+    });
   }
 
-  async function deleteTab(i){
+  function deleteTab(i){
     if(notes.length <= 1){
       if(!confirm('最後のタブです。内容をすべて消去しますか？')) return;
-      notes[0] = makeEmptyNote();
-      activeIndex = 0;
-      await loadNoteIntoUI(0);
-      renderTabs();
-      scheduleSave();
-      return;
+      return runTabOp(async ()=>{
+        notes[0] = makeEmptyNote();
+        activeIndex = 0;
+        await loadNoteIntoUI(0);
+        renderTabs();
+      });
     }
     if(!confirm('このタブを削除しますか？')) return;
-    const deletingActive = (i === activeIndex);
-    notes.splice(i, 1);
-    if(deletingActive){
-      activeIndex = Math.min(i, notes.length - 1);
-      await loadNoteIntoUI(activeIndex);
-    } else if(i < activeIndex){
-      activeIndex -= 1;
-    }
-    renderTabs();
-    scheduleSave();
+    return runTabOp(async ()=>{
+      const deletingActive = (i === activeIndex);
+      notes.splice(i, 1);
+      if(deletingActive){
+        activeIndex = Math.min(i, notes.length - 1);
+        await loadNoteIntoUI(activeIndex);
+      } else if(i < activeIndex){
+        activeIndex -= 1;
+      }
+      renderTabs();
+    });
   }
 
   // ---------- 貼り付け画像（サイズ調整可能） ----------
@@ -909,6 +947,7 @@
     saveTimer = setTimeout(doSaveAll, 700);
   }
   async function doSaveAll(){
+    if(busy){ scheduleSave(); return; } // タブ操作中は待ってから保存
     try{
       await saveActiveNoteState();
       await idbSet(STATE_KEY, { notes, activeIndex, updatedAt: Date.now() });
@@ -1046,11 +1085,10 @@
     if(entry.h > currentSheetHeight){
       resizeCanvasTo(wrap.clientWidth, entry.h);
     }
-    const w = wrap.clientWidth, h = currentSheetHeight;
     const img = new Image();
     img.onload = ()=>{
-      ctx.clearRect(0,0,w,h);
-      ctx.drawImage(img, 0, 0, w, entry.h); // 記録時の高さのまま、伸縮させずに描画
+      clearInkCanvas();
+      blitToInk(img); // 記録時のピクセルをそのまま戻す（伸縮させない）
       if(onDone) onDone();
     };
     img.src = entry.data;
@@ -1071,7 +1109,7 @@
   document.getElementById('clearInk').addEventListener('click', ()=>{
     if(!confirm('手書き部分だけを消去します。よろしいですか？（文字・画像は消えません）')) return;
     pushUndo();
-    ctx.clearRect(0,0,wrap.clientWidth,currentSheetHeight);
+    clearInkCanvas();
     scheduleSave();
   });
 
@@ -1106,10 +1144,8 @@
     previewCtx.drawImage(canvas, 0, 0);
   }
   function restorePreviewBase(){
-    const w = wrap.clientWidth, h = currentSheetHeight;
-    ctx.clearRect(0,0,w,h);
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.drawImage(previewCanvas, 0, 0, w, h);
+    clearInkCanvas();
+    blitToInk(previewCanvas);
   }
   // Shiftキー押下時：水平・垂直・45度に吸着
   function applyAngleSnap(x0, y0, x, y, snap){
@@ -1196,6 +1232,7 @@
   function endStroke(){
     if(!isDrawing) return;
     isDrawing = false;
+    ctx.globalCompositeOperation = 'source-over'; // 消しゴムモードを引きずらない
     scheduleSave();
   }
   canvas.addEventListener('pointerup', endStroke);
