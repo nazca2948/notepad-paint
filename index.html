@@ -1186,14 +1186,20 @@
     ctx.stroke();
   }
 
+  // 今のストロークで使っている道具（右ボタン・ペンのお尻のときだけ一時的に消しゴムになる）
+  let strokeTool = 'pen';
+
   canvas.addEventListener('pointerdown', (e)=>{
     if(!drawMode) return;
+    if(e.button === 1) return; // 中ボタンはモード切り替え用
+    // 右ボタン(2)・ペンタブの消しゴム側(5)でなぞったときは一時的に消しゴム
+    strokeTool = (e.button === 2 || e.button === 5) ? 'eraser' : tool;
     pushUndo();
     isDrawing = true;
     canvas.setPointerCapture(e.pointerId);
     const {x,y} = getPos(e);
     lastX = x; lastY = y;
-    if(tool === 'line' || tool === 'grid'){
+    if(strokeTool === 'line' || strokeTool === 'grid'){
       dragStartX = x; dragStartY = y;
       snapshotForPreview();
     }
@@ -1202,7 +1208,7 @@
     if(!isDrawing) return;
     let {x,y} = getPos(e);
 
-    if(tool === 'line'){
+    if(strokeTool === 'line'){
       ({x, y} = applyAngleSnap(dragStartX, dragStartY, x, y, e.shiftKey));
       restorePreviewBase();
       ctx.strokeStyle = currentColor;
@@ -1214,15 +1220,15 @@
       return;
     }
 
-    if(tool === 'grid'){
+    if(strokeTool === 'grid'){
       restorePreviewBase();
       drawGrid(dragStartX, dragStartY, x, y);
       return;
     }
 
-    ctx.globalCompositeOperation = (tool==='eraser') ? 'destination-out' : 'source-over';
+    ctx.globalCompositeOperation = (strokeTool==='eraser') ? 'destination-out' : 'source-over';
     ctx.strokeStyle = currentColor;
-    ctx.lineWidth = (tool==='eraser') ? Math.max(currentWidth*4, 14) : currentWidth;
+    ctx.lineWidth = (strokeTool==='eraser') ? Math.max(currentWidth*4, 14) : currentWidth;
     ctx.beginPath();
     ctx.moveTo(lastX, lastY);
     ctx.lineTo(x, y);
@@ -1238,6 +1244,41 @@
   canvas.addEventListener('pointerup', endStroke);
   canvas.addEventListener('pointercancel', endStroke);
   canvas.addEventListener('pointerleave', ()=>{ if(isDrawing) endStroke(); });
+
+  // 手書きモード中は右クリックメニューを出さない（右ドラッグ＝消しゴムのため）
+  canvas.addEventListener('contextmenu', (e)=>{ if(drawMode) e.preventDefault(); });
+
+  // ---------- 中ボタン：手書き ⇔ 入力 の切り替え ----------
+  // mousedownで止めないと、Windowsではオートスクロール、Linuxでは中クリック貼り付けが動いてしまう
+  wrap.addEventListener('mousedown', (e)=>{
+    if(e.button !== 1) return;
+    e.preventDefault();
+    if(isDrawing) return;
+    setDrawMode(!drawMode);
+  });
+  wrap.addEventListener('auxclick', (e)=>{ if(e.button === 1) e.preventDefault(); });
+
+  // ---------- ホイール：手書きモード中は色を切り替え ----------
+  // Shiftを押しながらホイールすると、手書きモード中でも普通にスクロールする。
+  // 入力モードでは普通のスクロールのまま。
+  const swatchEls = Array.from(document.querySelectorAll('.swatch'));
+  let wheelAccum = 0;
+  wrap.addEventListener('wheel', (e)=>{
+    if(!drawMode || e.ctrlKey) return; // Ctrl+ホイール（ブラウザの拡大）は邪魔しない
+    e.preventDefault();
+    if(e.shiftKey){
+      wrap.scrollTop += (e.deltaY || e.deltaX);
+      return;
+    }
+    // タッチパッドは細かいイベントが大量に来るので、ある程度たまったら1色進める
+    wheelAccum += e.deltaY;
+    if(Math.abs(wheelAccum) < 50) return;
+    const step = wheelAccum > 0 ? 1 : -1;
+    wheelAccum = 0;
+    const cur = swatchEls.findIndex(s => s.dataset.color === currentColor);
+    const next = swatchEls[(cur + step + swatchEls.length) % swatchEls.length];
+    next.click();
+  }, { passive: false });
 
   loadAll();
 })();
