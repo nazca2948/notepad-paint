@@ -187,16 +187,36 @@
     position:relative;
     flex:1;
     overflow-y:auto;
-    overflow-x:hidden;
+    overflow-x:auto;
     /* スクロールバーの有無で幅が変わらないよう、常にスクロールバー分の領域を確保する */
     scrollbar-gutter:stable;
   }
   /* .sheet が「紙」そのもの。textarea・画像・canvasはこの中で同じ座標系に重なる */
+  /* 表示ズーム用の外枠。中の .sheet を transform で拡大縮小し、
+     この枠の大きさを「拡大後の大きさ」にしてスクロール範囲を合わせる */
+  .sheet-sizer{
+    position:relative;
+    overflow:hidden;
+  }
   .sheet{
     position:relative;
-    width:100%;
-    /* 高さはJSで内容量に応じて設定（初期値はビューポート分） */
+    transform-origin:0 0;
+    /* 幅・高さはJSで設定（高さは内容量に応じて伸びる） */
   }
+
+  .zoom{display:flex;align-items:center;gap:2px;}
+  .zoom button{
+    border:1px solid #c9c9c9;
+    background:#fff;
+    min-width:26px;
+    padding:3px 6px;
+    border-radius:4px;
+    font-size:13px;
+    cursor:pointer;
+    color:#333;
+  }
+  .zoom button:hover{background:#eef1fb;}
+  .zoom #zoomLabel{min-width:52px;font-size:12px;}
   textarea#text{
     position:absolute;top:0;left:0;
     width:100%;height:100%;
@@ -277,6 +297,11 @@
   <div class="topbar">
     <span class="title">メモ帳</span>
     <div class="right">
+      <div class="zoom" title="表示の拡大・縮小（Ctrl+ホイールでも可）">
+        <button id="zoomOut">−</button>
+        <button id="zoomLabel" title="クリックで100%に戻す">100%</button>
+        <button id="zoomIn">＋</button>
+      </div>
       <button id="openPdf" title="PDFを開いて手書きで書き込む（ドラッグ＆ドロップでも可）">📄 PDF</button>
       <input type="file" id="pdfInput" accept="application/pdf,.pdf" hidden>
       <button id="toggleDraw">✏ 手書き</button>
@@ -326,10 +351,12 @@
   </div>
 
   <div class="editor-wrap" id="wrap">
-    <div class="sheet" id="sheet">
-      <textarea id="text" spellcheck="false" placeholder=""></textarea>
-      <div class="images-layer" id="imagesLayer"></div>
-      <canvas id="ink"></canvas>
+    <div class="sheet-sizer" id="sizer">
+      <div class="sheet" id="sheet">
+        <textarea id="text" spellcheck="false" placeholder=""></textarea>
+        <div class="images-layer" id="imagesLayer"></div>
+        <canvas id="ink"></canvas>
+      </div>
     </div>
   </div>
 </div>
@@ -419,7 +446,69 @@
     ctx.lineJoin = 'round';
     currentSheetHeight = ph / DPR;
     sheet.style.height = currentSheetHeight + 'px';
+    updateSizer();
   }
+
+  // ---------- 表示ズーム ----------
+  // 紙(.sheet)の中の座標（手書き・画像・PDF）はズームに関係なく常に「等倍の論理px」。
+  // 見た目だけ transform で拡大縮小するので、ズームを変えても書き込みがずれない。
+  const sizer = document.getElementById('sizer');
+  const zoomLabel = document.getElementById('zoomLabel');
+  const ZOOM_MIN = 0.5, ZOOM_MAX = 3;
+  let zoom = 1;
+  try{
+    const z = parseFloat(localStorage.getItem('notepad-zoom'));
+    if(z >= ZOOM_MIN && z <= ZOOM_MAX) zoom = z;
+  }catch(e){ /* 無視 */ }
+
+  function updateSizer(){
+    const baseW = wrap.clientWidth;
+    sheet.style.width = baseW + 'px';
+    sheet.style.transform = zoom === 1 ? '' : `scale(${zoom})`;
+    // ウィンドウを狭めても手書き・PDFの右側が切れないよう、キャンバス幅まで横スクロールできるようにする
+    sizer.style.width = (Math.max(baseW, canvas.width / DPR) * zoom) + 'px';
+    sizer.style.height = (currentSheetHeight * zoom) + 'px';
+    if(zoomLabel) zoomLabel.textContent = Math.round(zoom * 100) + '%';
+  }
+
+  // (clientX, clientY) の位置を固定したままズームを変える。省略時は表示エリアの中央
+  function setZoom(newZoom, clientX, clientY){
+    newZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(newZoom * 100) / 100));
+    if(newZoom === zoom) return;
+    const r = wrap.getBoundingClientRect();
+    const px = (clientX === undefined) ? wrap.clientWidth / 2 : clientX - r.left;
+    const py = (clientY === undefined) ? wrap.clientHeight / 2 : clientY - r.top;
+    const cx = (wrap.scrollLeft + px) / zoom;
+    const cy = (wrap.scrollTop + py) / zoom;
+    zoom = newZoom;
+    updateSizer();
+    wrap.scrollLeft = cx * zoom - px;
+    wrap.scrollTop = cy * zoom - py;
+    try{ localStorage.setItem('notepad-zoom', String(zoom)); }catch(e){ /* 無視 */ }
+  }
+  const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+  function zoomStep(dir, clientX, clientY){
+    const next = dir > 0
+      ? ZOOM_STEPS.find(s => s > zoom + 0.001)
+      : [...ZOOM_STEPS].reverse().find(s => s < zoom - 0.001);
+    if(next !== undefined) setZoom(next, clientX, clientY);
+  }
+  document.getElementById('zoomIn').addEventListener('click', ()=> zoomStep(1));
+  document.getElementById('zoomOut').addEventListener('click', ()=> zoomStep(-1));
+  zoomLabel.addEventListener('click', ()=> setZoom(1));
+
+  // Ctrl+ホイール（タッチパッドのピンチ操作もこれになる）で拡大縮小
+  wrap.addEventListener('wheel', (e)=>{
+    if(!e.ctrlKey) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    // ピンチは細かい値で連続して来るので連続的に、マウスホイールは1段ずつ
+    if(Math.abs(e.deltaY) < 50){
+      setZoom(zoom * Math.exp(-e.deltaY * 0.01), e.clientX, e.clientY);
+    } else {
+      zoomStep(e.deltaY < 0 ? 1 : -1, e.clientX, e.clientY);
+    }
+  }, { passive: false });
 
   // ---------- キャンバス（＝紙）のサイズ変更。既存の絵は伸縮させず、そのままの位置で保持 ----------
   // 幅は狭めない（ウィンドウを狭めたときに右側の手書きが切り取られて消えるのを防ぐ）。
@@ -501,6 +590,7 @@
     resizeTimer = setTimeout(()=>{
       resizeCanvasTo(wrap.clientWidth, Math.max(currentSheetHeight, wrap.clientHeight));
       measureAndGrow();
+      updateSizer(); // 幅が狭まったとき（キャンバスは縮めない）も紙の幅を合わせる
     }, 150);
   });
 
@@ -806,7 +896,7 @@
     const startX = e.clientX, startY = e.clientY;
     const origX = imgData.x, origY = imgData.y;
     function onMove(ev){
-      const dx = ev.clientX - startX, dy = ev.clientY - startY;
+      const dx = (ev.clientX - startX) / zoom, dy = (ev.clientY - startY) / zoom;
       let nx = origX + dx, ny = origY + dy;
       nx = Math.max(0, Math.min(nx, Math.max(0, wrap.clientWidth - imgData.w)));
       ny = Math.max(0, ny);
@@ -832,12 +922,12 @@
     const origW = imgData.w, origH = imgData.h;
     const aspect = origW / (origH || 1);
     function onMove(ev){
-      const dx = ev.clientX - startX;
+      const dx = (ev.clientX - startX) / zoom;
       let newW = Math.max(30, origW + dx);
       newW = Math.min(newW, Math.max(30, wrap.clientWidth - imgData.x));
       let newH;
       if(ev.shiftKey){
-        const dy = ev.clientY - startY;
+        const dy = (ev.clientY - startY) / zoom;
         newH = Math.max(30, origH + dy);
       } else {
         newH = newW / aspect;
@@ -877,7 +967,7 @@
       h = h * (maxW / w);
       w = maxW;
     }
-    const scrollTop = wrap.scrollTop;
+    const scrollTop = wrap.scrollTop / zoom;
     const x = 20;
     const y = scrollTop + 20;
     const note = notes[activeIndex];
@@ -1297,7 +1387,11 @@
   });
 
   // ---------- 描画 ----------
-  function getPos(e){ return { x: e.offsetX, y: e.offsetY }; }
+  // ズーム中でも正しい位置に描けるよう、画面上の位置を紙の座標（等倍）に直す
+  function getPos(e){
+    const r = canvas.getBoundingClientRect();
+    return { x: (e.clientX - r.left) / zoom, y: (e.clientY - r.top) / zoom };
+  }
 
   // 直線・グリッドツール用：ドラッグ中のプレビュー表示に使う退避キャンバス
   const previewCanvas = document.createElement('canvas');
