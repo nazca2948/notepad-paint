@@ -3,10 +3,12 @@
 // オフラインの時だけ最後に取得できたキャッシュにフォールバックします。
 // これにより index.html だけ更新すれば、次回アクセス時に自動で反映されます。
 
-const CACHE_NAME = 'memo-notepad-v3';
+const CACHE_NAME = 'memo-notepad-v4';
 const APP_SHELL = [
   './',
   './index.html',
+  './style.css',
+  './app.js',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',

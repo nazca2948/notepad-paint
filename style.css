@@ -1,0 +1,313 @@
+/* メモ帳ペイント スタイル */
+*{box-sizing:border-box;}
+html,body{
+  margin:0;padding:0;height:100%;
+  background:#fff;
+  font-family:"Segoe UI","Yu Gothic UI","Meiryo UI",sans-serif;
+  overflow:hidden;
+}
+.app{display:flex;flex-direction:column;height:100%;}
+
+.tab-right button.file-btn{
+  border:1px solid #c9c9c9;
+  background:#fff;
+  padding:3px 8px;
+  border-radius:4px;
+  font-size:12px;
+  cursor:pointer;
+  color:#333;
+}
+.tab-right button.file-btn:hover{background:#eef1fb;}
+.tab-right .file-group{display:flex;gap:4px;}
+button#toggleDraw{
+  border:1px solid #c9c9c9;
+  background:#fff;
+  padding:3px 10px;
+  border-radius:4px;
+  font-size:12px;
+  cursor:pointer;
+  color:#333;
+}
+button#toggleDraw:hover{background:#eef1fb;}
+button#toggleDraw.active{
+  background:#dbe6ff;
+  border-color:#7ea3f0;
+  color:#1c3f9e;
+  font-weight:600;
+}
+/* 保存状態は普段は出さない。エラーや読み込み中のときだけ表示 */
+#status{display:none;font-size:12px;color:#c0493b;}
+#status.show{display:inline;}
+
+/* ---- タブバー ---- */
+.tabbar{
+  display:flex;align-items:stretch;
+  background:#e8e8e6;
+  border-bottom:1px solid #d3d3cd;
+  flex-shrink:0;
+  user-select:none;
+}
+.tabs{
+  display:flex;align-items:flex-end;
+  gap:3px;
+  padding:5px 8px 0;
+  flex:1;min-width:0;
+  overflow-x:auto;
+  overflow-y:hidden;
+  white-space:nowrap;
+  scrollbar-width:thin;
+}
+.tabs::-webkit-scrollbar{height:4px;}
+.tab-right{
+  display:flex;align-items:center;gap:10px;
+  padding:0 10px;
+  flex-shrink:0;
+}
+.tab{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:6px 8px 6px 12px;
+  font-size:12px;
+  color:#666;
+  background:#dcdcd8;
+  border:1px solid transparent;
+  border-bottom:none;
+  border-radius:6px 6px 0 0;
+  cursor:pointer;
+  max-width:150px;
+  flex-shrink:0;
+}
+.tab.active{
+  background:#fff;
+  color:#222;
+  border-color:#d3d3cd;
+  font-weight:600;
+}
+.tab .tab-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.tab .tab-close{
+  flex-shrink:0;
+  width:16px;height:16px;
+  display:flex;align-items:center;justify-content:center;
+  border-radius:3px;
+  color:#999;
+  opacity:0;
+  font-size:13px;
+  line-height:1;
+}
+.tab:hover .tab-close, .tab.active .tab-close{opacity:1;}
+.tab .tab-close:hover{background:#e3e3e3;color:#333;}
+.tab-add{
+  flex-shrink:0;
+  padding:6px 12px;
+  margin-bottom:0;
+  font-size:15px;
+  color:#777;
+  cursor:pointer;
+  border-radius:6px 6px 0 0;
+}
+.tab-add:hover{background:#d3d3cd;color:#333;}
+
+/* ---- 手書きモード時だけ出るツールバー ---- */
+.inkbar{
+  display:flex;align-items:center;gap:12px;
+  height:40px;
+  padding:0 10px;
+  background:#eef1fb;
+  border-bottom:1px solid #c9d3ee;
+  font-size:12px;
+  flex-shrink:0;
+  flex-wrap:nowrap;
+  overflow-x:auto;
+  white-space:nowrap;
+}
+.inkbar.hidden{display:none;}
+
+/* ---- 手書きオフ時に出る文字設定バー ---- */
+.textbar{
+  display:flex;align-items:center;gap:16px;
+  height:40px;
+  padding:0 10px;
+  background:#f7f7f5;
+  border-bottom:1px solid #e2e2dc;
+  font-size:12px;
+  flex-shrink:0;
+  flex-wrap:nowrap;
+  overflow-x:auto;
+  white-space:nowrap;
+  color:#444;
+}
+.textbar.hidden{display:none;}
+.textbar .group{display:flex;align-items:center;gap:6px;flex-shrink:0;height:100%;}
+.textbar input[type=range]{width:120px;}
+.textbar #fontSizeLabel{min-width:34px;display:inline-block;}
+.textbar label{display:flex;align-items:center;gap:5px;cursor:pointer;}
+.textbar .hint{color:#aaa;}
+.inkbar .group{display:flex;align-items:center;gap:6px;flex-shrink:0;height:100%;}
+.inkbar button.tool{
+  border:1px solid transparent;
+  background:transparent;
+  padding:4px 9px;
+  border-radius:4px;
+  font-size:12px;
+  cursor:pointer;
+  color:#333;
+}
+.inkbar button.tool:hover{background:#e0e7fb;}
+.inkbar button.tool.active{background:#fff;border-color:#a9bce8;font-weight:600;}
+.swatch, .tswatch{
+  width:18px;height:18px;border-radius:50%;
+  border:2px solid transparent;
+  cursor:pointer;padding:0;
+}
+.swatch.selected, .tswatch.selected{border-color:#555;}
+.inkbar input[type=range]{width:70px;}
+.inkbar input[type=number]{
+  width:40px;
+  padding:2px 4px;
+  border:1px solid #c3cdec;
+  border-radius:4px;
+  font-size:12px;
+}
+.inkbar button.action{
+  border:1px solid #a9bce8;
+  background:#fff;
+  padding:4px 9px;
+  border-radius:4px;
+  font-size:12px;
+  cursor:pointer;
+}
+.inkbar button.action:hover{background:#f5f7fd;}
+.inkbar button.action:disabled{opacity:0.4;cursor:default;background:#fff;}
+
+/* ---- 本体：1枚の紙としてスクロールするエリア ---- */
+.editor-wrap{
+  position:relative;
+  flex:1;
+  overflow-y:auto;
+  overflow-x:hidden;
+  /* スクロールバーの有無で幅が変わらないよう、常にスクロールバー分の領域を確保する */
+  scrollbar-gutter:stable;
+}
+/* .sheet が「紙」そのもの。textarea・画像・canvasはこの中で同じ座標系に重なる */
+.sheet{
+  position:relative;
+  width:100%;
+  /* 高さはJSで内容量に応じて設定（初期値はビューポート分） */
+}
+textarea#text{
+  position:absolute;top:0;left:0;
+  width:100%;height:100%;
+  border:none;outline:none;resize:none;
+  padding:10px 14px;
+  font-family:"Yu Gothic Bold","Yu Gothic UI Bold","Yu Gothic","Meiryo",sans-serif;
+  font-weight:700;
+  font-size:19px;
+  line-height:1.6;
+  color:#111;
+  background:transparent;
+}
+
+/* ---- 貼り付けた画像レイヤー（文字の上、手書きの下） ---- */
+.images-layer{
+  position:absolute;top:0;left:0;right:0;
+  pointer-events:none;
+}
+.img-box{
+  position:absolute;
+  pointer-events:auto;
+  touch-action:none;
+}
+.img-box img{
+  width:100%;height:100%;
+  display:block;
+  user-select:none;
+  -webkit-user-drag:none;
+  pointer-events:none;
+  box-shadow:0 0 0 1px rgba(0,0,0,0.08);
+}
+.img-box.selected img{box-shadow:0 0 0 2px #7ea3f0;}
+.img-box .img-handle{
+  position:absolute;right:-7px;bottom:-7px;
+  width:14px;height:14px;
+  background:#fff;border:2px solid #7ea3f0;border-radius:50%;
+  cursor:nwse-resize;
+  display:none;
+}
+.img-box.selected .img-handle{display:block;}
+.img-box .img-del{
+  position:absolute;top:-10px;right:-10px;
+  width:20px;height:20px;
+  background:#c0493b;color:#fff;
+  border-radius:50%;
+  font-size:13px;line-height:20px;text-align:center;
+  cursor:pointer;
+  display:none;
+}
+.img-box.selected .img-del{display:flex;align-items:center;justify-content:center;}
+/* PDFのページ：貼り付け画像と同じく移動・拡大縮小できる。少し影を付けて紙らしく */
+.img-box.pdf-page img{box-shadow:0 1px 4px rgba(0,0,0,0.25);}
+.img-box.pdf-page.selected img{box-shadow:0 0 0 2px #7ea3f0;}
+/* 移動・拡大縮小中だけ、画像の上の手書きをここに乗せて一緒に動かす */
+.img-box .img-ink{position:absolute;pointer-events:none;}
+
+/* ロックした画像：移動・拡大縮小・削除できない（書き込み・テキストはできる） */
+.img-box.lock .img-handle, .img-box.lock .img-del{display:none !important;}
+.img-box.lock::after{
+  content:'🔒';
+  position:absolute;top:-10px;left:-10px;
+  width:20px;height:20px;
+  font-size:11px;line-height:20px;text-align:center;
+  background:#fff;border:1px solid #c9c9c9;border-radius:50%;
+  pointer-events:none;
+  display:none;
+}
+.img-box.lock.selected::after, .img-box.lock:hover::after{display:block;}
+
+/* ---- 画像の上のテキストボックス（右クリックで作成） ---- */
+.img-texts{position:absolute;inset:0;pointer-events:none;}
+.img-text{
+  position:absolute;
+  pointer-events:auto;
+  min-height:1em;
+}
+.img-text .tb-body{
+  outline:none;
+  white-space:pre-wrap;
+  word-break:break-word;
+  font-family:"Yu Gothic Bold","Yu Gothic UI Bold","Yu Gothic","Meiryo",sans-serif;
+  font-weight:700;
+  line-height:1.4;
+  color:#111;
+  padding:2px 4px;
+  cursor:text;
+  border:1px dashed transparent;
+}
+.img-text:hover .tb-body{border-color:rgba(126,163,240,0.6);}
+.img-text:focus-within .tb-body{border-color:#7ea3f0;background:rgba(255,255,255,0.35);}
+.img-text .tb-body:empty::before{content:'文字を入力';color:#aaa;font-weight:400;}
+/* 移動用のつまみ（左上）と幅変更用のつまみ（右端） */
+.img-text .tb-move, .img-text .tb-width{
+  position:absolute;
+  display:none;
+  background:#fff;
+  border:1px solid #7ea3f0;
+  touch-action:none;
+}
+.img-text:hover .tb-move, .img-text:focus-within .tb-move,
+.img-text:hover .tb-width, .img-text:focus-within .tb-width{display:block;}
+.img-text .tb-move{
+  left:-9px;top:-9px;width:14px;height:14px;border-radius:3px;
+  cursor:move;
+}
+.img-text .tb-width{
+  right:-4px;top:50%;width:7px;height:16px;margin-top:-8px;border-radius:3px;
+  cursor:ew-resize;
+}
+
+.editor-wrap.drag-over{outline:3px dashed #7ea3f0;outline-offset:-6px;}
+
+canvas#ink{
+  position:absolute;top:0;left:0;
+  pointer-events:none;
+  touch-action:none;
+}
+canvas#ink.draw-pen, canvas#ink.draw-eraser, canvas#ink.draw-line, canvas#ink.draw-grid{cursor:crosshair;pointer-events:auto;}
