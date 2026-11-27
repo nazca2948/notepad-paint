@@ -251,6 +251,19 @@
   /* 移動・拡大縮小中だけ、画像の上の手書きをここに乗せて一緒に動かす */
   .img-box .img-ink{position:absolute;pointer-events:none;}
 
+  /* ロックした画像：移動・拡大縮小・削除できない（書き込み・テキストはできる） */
+  .img-box.lock .img-handle, .img-box.lock .img-del{display:none !important;}
+  .img-box.lock::after{
+    content:'🔒';
+    position:absolute;top:-10px;left:-10px;
+    width:20px;height:20px;
+    font-size:11px;line-height:20px;text-align:center;
+    background:#fff;border:1px solid #c9c9c9;border-radius:50%;
+    pointer-events:none;
+    display:none;
+  }
+  .img-box.lock.selected::after, .img-box.lock:hover::after{display:block;}
+
   /* ---- 画像の上のテキストボックス（右クリックで作成） ---- */
   .img-texts{position:absolute;inset:0;pointer-events:none;}
   .img-text{
@@ -328,7 +341,7 @@
       <button class="tswatch" data-color="#b3392c" style="background:#b3392c;"></button>
       <button class="tswatch" data-color="#2f7a4f" style="background:#2f7a4f;"></button>
     </div>
-    <div class="group hint">画像・PDFはドロップ ／ 画像を右クリックで文字 ／ Ctrl+クリック→Wで幅そろえ</div>
+    <div class="group hint">Ctrl+クリック→Wで幅そろえ ／ Ctrl+Lで画像をロック</div>
   </div>
 
   <div class="inkbar hidden" id="inkbar">
@@ -796,6 +809,7 @@
 
     // PDFのページ（以前のバージョンでは locked として保存）は見た目だけ区別する
     if(imgData.pdf || imgData.locked) box.classList.add('pdf-page');
+    if(imgData.lock) box.classList.add('lock');
 
     // 画像の上のテキストボックス
     const textsEl = document.createElement('div');
@@ -831,7 +845,7 @@
       if(ae && (ae === textEl || ae.isContentEditable)) ae.blur();
       if(e.target === handle){
         if(!box.classList.contains('selected')) selectImageBox(box);
-        startResize(e, box, imgData);
+        if(!imgData.lock) startResize(e, box, imgData);
         return;
       }
       // Ctrl / Shift + クリック：複数選択に追加・解除
@@ -841,7 +855,8 @@
         return;
       }
       if(!box.classList.contains('selected')) selectImageBox(box);
-      startMove(e, box); // 選択中の画像をまとめて動かす
+      if(imgData.lock){ e.preventDefault(); return; } // ロック中は動かさない
+      startMove(e, box); // 選択中の画像（ロック中のものを除く）をまとめて動かす
     });
 
     imagesLayerEl.appendChild(box);
@@ -1085,7 +1100,7 @@
     e.preventDefault();
     box.setPointerCapture(e.pointerId);
     const items = selOrder.map(id => ({ box: boxById(id), im: imgDataById(id) }))
-                          .filter(it => it.box && it.im);
+                          .filter(it => it.box && it.im && !it.im.lock);
     items.forEach(it=>{ it.ox = it.im.x; it.oy = it.im.y; it.ink = liftInk(it.box, it.im); });
     // まとめて動かしても、どの画像も紙からはみ出さない範囲に移動量を制限する
     const wrapW = wrap.clientWidth;
@@ -1162,7 +1177,7 @@
     const wrapW = wrap.clientWidth;
     selOrder.slice(1).forEach(id=>{
       const im = imgDataById(id), box = boxById(id);
-      if(!im || !box) return;
+      if(!im || !box || im.lock) return; // ロック中の画像は大きさを変えない
       const ink = liftInk(box, im);
       const aspect = im.w / (im.h || 1);
       im.w = base.w;
@@ -1392,7 +1407,21 @@
     if(e.key === 'Delete' || e.key === 'Backspace'){
       if(selOrder.length){
         e.preventDefault();
-        [...selOrder].forEach(id => removeImage(id));
+        [...selOrder].filter(id => { const im = imgDataById(id); return im && !im.lock; })
+                     .forEach(id => removeImage(id));
+      }
+    } else if((e.key === 'l' || e.key === 'L') && (e.ctrlKey || e.metaKey) && !e.altKey){
+      // Ctrl+L：選んだ画像のロック／解除（1枚でもロックされていなければ全部ロック、全部ロック済みなら解除）
+      if(selOrder.length){
+        e.preventDefault();
+        const ims = selOrder.map(imgDataById).filter(Boolean);
+        const lockIt = ims.some(im => !im.lock);
+        ims.forEach(im=>{
+          im.lock = lockIt;
+          const b = boxById(im.id);
+          if(b) b.classList.toggle('lock', lockIt);
+        });
+        scheduleSave();
       }
     } else if((e.key === 'w' || e.key === 'W') && !e.ctrlKey && !e.metaKey && !e.altKey){
       if(selOrder.length >= 2){
