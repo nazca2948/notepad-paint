@@ -155,12 +155,12 @@
   }
   .inkbar button.tool:hover{background:#e0e7fb;}
   .inkbar button.tool.active{background:#fff;border-color:#a9bce8;font-weight:600;}
-  .swatch{
+  .swatch, .tswatch{
     width:18px;height:18px;border-radius:50%;
     border:2px solid transparent;
     cursor:pointer;padding:0;
   }
-  .swatch.selected{border-color:#555;}
+  .swatch.selected, .tswatch.selected{border-color:#555;}
   .inkbar input[type=range]{width:70px;}
   .inkbar input[type=number]{
     width:40px;
@@ -248,6 +248,49 @@
   /* PDFのページ：貼り付け画像と同じく移動・拡大縮小できる。少し影を付けて紙らしく */
   .img-box.pdf-page img{box-shadow:0 1px 4px rgba(0,0,0,0.25);}
   .img-box.pdf-page.selected img{box-shadow:0 0 0 2px #7ea3f0;}
+  /* 移動・拡大縮小中だけ、画像の上の手書きをここに乗せて一緒に動かす */
+  .img-box .img-ink{position:absolute;pointer-events:none;}
+
+  /* ---- 画像の上のテキストボックス（右クリックで作成） ---- */
+  .img-texts{position:absolute;inset:0;pointer-events:none;}
+  .img-text{
+    position:absolute;
+    pointer-events:auto;
+    min-height:1em;
+  }
+  .img-text .tb-body{
+    outline:none;
+    white-space:pre-wrap;
+    word-break:break-word;
+    font-family:"Yu Gothic Bold","Yu Gothic UI Bold","Yu Gothic","Meiryo",sans-serif;
+    font-weight:700;
+    line-height:1.4;
+    color:#111;
+    padding:2px 4px;
+    cursor:text;
+    border:1px dashed transparent;
+  }
+  .img-text:hover .tb-body{border-color:rgba(126,163,240,0.6);}
+  .img-text:focus-within .tb-body{border-color:#7ea3f0;background:rgba(255,255,255,0.35);}
+  .img-text .tb-body:empty::before{content:'文字を入力';color:#aaa;font-weight:400;}
+  /* 移動用のつまみ（左上）と幅変更用のつまみ（右端） */
+  .img-text .tb-move, .img-text .tb-width{
+    position:absolute;
+    display:none;
+    background:#fff;
+    border:1px solid #7ea3f0;
+    touch-action:none;
+  }
+  .img-text:hover .tb-move, .img-text:focus-within .tb-move,
+  .img-text:hover .tb-width, .img-text:focus-within .tb-width{display:block;}
+  .img-text .tb-move{
+    left:-9px;top:-9px;width:14px;height:14px;border-radius:3px;
+    cursor:move;
+  }
+  .img-text .tb-width{
+    right:-4px;top:50%;width:7px;height:16px;margin-top:-8px;border-radius:3px;
+    cursor:ew-resize;
+  }
 
   .editor-wrap.drag-over{outline:3px dashed #7ea3f0;outline-offset:-6px;}
 
@@ -278,7 +321,14 @@
     <div class="group">
       <label><input type="checkbox" id="boldToggle" checked> 太字</label>
     </div>
-    <div class="group hint">画像は Ctrl+V、PDFは画面にドラッグ＆ドロップ</div>
+    <div class="group" title="テキストボックスの文字色">
+      <span>文字色</span>
+      <button class="tswatch selected" data-color="#1a1a1a" style="background:#1a1a1a;"></button>
+      <button class="tswatch" data-color="#2f5ea8" style="background:#2f5ea8;"></button>
+      <button class="tswatch" data-color="#b3392c" style="background:#b3392c;"></button>
+      <button class="tswatch" data-color="#2f7a4f" style="background:#2f7a4f;"></button>
+    </div>
+    <div class="group hint">画像・PDFはドロップ ／ 画像を右クリックで文字 ／ Ctrl+クリック→Wで幅そろえ</div>
   </div>
 
   <div class="inkbar hidden" id="inkbar">
@@ -724,6 +774,7 @@
       if(img._objectUrl) URL.revokeObjectURL(img._objectUrl);
     });
     imagesLayerEl.innerHTML = '';
+    selOrder = [];
     (note.images || []).forEach(im => createImageBoxEl(im));
   }
 
@@ -746,6 +797,20 @@
     // PDFのページ（以前のバージョンでは locked として保存）は見た目だけ区別する
     if(imgData.pdf || imgData.locked) box.classList.add('pdf-page');
 
+    // 画像の上のテキストボックス
+    const textsEl = document.createElement('div');
+    textsEl.className = 'img-texts';
+    box.appendChild(textsEl);
+    (imgData.texts || []).forEach(t => createTextBoxEl(box, imgData, t));
+
+    // 右クリック：標準メニューの代わりに、その位置にテキストボックスを作る
+    box.addEventListener('contextmenu', (e)=>{
+      e.preventDefault();
+      if(e.target.closest('.img-text')) return; // テキストボックスの上では何もしない
+      const r = box.getBoundingClientRect();
+      addTextBox(box, imgData, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
+    });
+
     const delBtn = document.createElement('div');
     delBtn.className = 'img-del';
     delBtn.textContent = '×';
@@ -759,24 +824,200 @@
     box.appendChild(handle);
 
     box.addEventListener('pointerdown', (e)=>{
-      selectImageBox(box);
+      if(e.button === 1 || e.button === 2 || e.target === delBtn) return;
+      if(e.target.closest('.img-text')) return; // テキストボックスの操作は別で扱う
+      // 画像を触っている間は文字入力から外す（W・Deleteキーが文字として入らないように）
+      const ae = document.activeElement;
+      if(ae && (ae === textEl || ae.isContentEditable)) ae.blur();
       if(e.target === handle){
+        if(!box.classList.contains('selected')) selectImageBox(box);
         startResize(e, box, imgData);
-      } else if(e.target !== delBtn){
-        startMove(e, box, imgData);
+        return;
       }
+      // Ctrl / Shift + クリック：複数選択に追加・解除
+      if(e.ctrlKey || e.metaKey || e.shiftKey){
+        e.preventDefault();
+        toggleImageSelection(box);
+        return;
+      }
+      if(!box.classList.contains('selected')) selectImageBox(box);
+      startMove(e, box); // 選択中の画像をまとめて動かす
     });
 
     imagesLayerEl.appendChild(box);
     return box;
   }
 
+  // ---------- テキストボックスの文字色 ----------
+  // 選んでいるテキストボックスがあればその色を変える。新しく作るテキストボックスもこの色になる。
+  let textColor = '#1a1a1a';
+  const tswatchEls = Array.from(document.querySelectorAll('.tswatch'));
+  function showTextColor(color){
+    textColor = color;
+    tswatchEls.forEach(s => s.classList.toggle('selected', s.dataset.color === color));
+  }
+  tswatchEls.forEach(s=>{
+    // 押してもテキストボックスの入力状態が外れないようにする
+    s.addEventListener('pointerdown', e=> e.preventDefault());
+    s.addEventListener('mousedown', e=> e.preventDefault());
+    s.addEventListener('click', ()=>{
+      showTextColor(s.dataset.color);
+      const ae = document.activeElement;
+      const el = ae && ae.classList && ae.classList.contains('tb-body') ? ae.closest('.img-text') : null;
+      if(el){
+        el._data.color = textColor;
+        ae.style.color = textColor;
+        scheduleSave();
+      }
+    });
+  });
+
+  // ---------- 画像の上のテキストボックス ----------
+  // 位置・幅・文字サイズは「画像に対する割合」で持つので、画像を動かしたり拡大縮小しても一緒についていく。
+  // imgData.texts = [{ id, rx, ry, rw, fsr, text }]  （fsr = 文字サイズ ÷ 画像の幅）
+  function layoutTextBoxes(box, im){
+    box.querySelectorAll('.img-text').forEach(el=>{
+      const t = el._data;
+      el.style.left = (t.rx * 100) + '%';
+      el.style.top = (t.ry * 100) + '%';
+      el.style.width = (t.rw * 100) + '%';
+      el.querySelector('.tb-body').style.fontSize = (t.fsr * im.w) + 'px';
+    });
+  }
+
+  function createTextBoxEl(box, im, t){
+    const el = document.createElement('div');
+    el.className = 'img-text';
+    el.dataset.id = t.id;
+    el._data = t;
+
+    const body = document.createElement('div');
+    body.className = 'tb-body';
+    body.spellcheck = false;
+    try{ body.contentEditable = 'plaintext-only'; }catch(err){ body.contentEditable = 'true'; }
+    if(body.contentEditable !== 'plaintext-only') body.contentEditable = 'true';
+    body.textContent = t.text || '';
+    body.style.color = t.color || '#1a1a1a';
+    el.appendChild(body);
+    // テキストボックスを選んだら、文字色ボタンもその色を表示する
+    body.addEventListener('focus', ()=> showTextColor(t.color || '#1a1a1a'));
+
+    const mv = document.createElement('div');
+    mv.className = 'tb-move';
+    mv.title = 'ドラッグで移動';
+    el.appendChild(mv);
+    const wd = document.createElement('div');
+    wd.className = 'tb-width';
+    wd.title = 'ドラッグで幅を変更';
+    el.appendChild(wd);
+
+    body.addEventListener('input', ()=>{
+      t.text = body.innerText.replace(/\n$/, '');
+      measureAndGrow();
+      scheduleSave();
+    });
+    // 貼り付けは文字だけにする（書式付きの貼り付けで見た目が崩れないように）
+    body.addEventListener('paste', (e)=>{
+      const text = e.clipboardData && e.clipboardData.getData('text/plain');
+      if(!text) return; // 画像などは通常の貼り付け処理へ
+      e.preventDefault();
+      e.stopPropagation();
+      document.execCommand('insertText', false, text);
+    });
+    // 空のまま離れたら消す
+    body.addEventListener('blur', ()=>{
+      if(!(t.text || '').trim()) removeTextBox(box, im, t.id);
+    });
+    body.addEventListener('keydown', (e)=>{
+      if(e.key === 'Escape') body.blur();
+    });
+
+    mv.addEventListener('pointerdown', (e)=> dragTextBox(e, el, box, im, 'move'));
+    wd.addEventListener('pointerdown', (e)=> dragTextBox(e, el, box, im, 'width'));
+
+    box.querySelector('.img-texts').appendChild(el);
+    layoutTextBoxes(box, im);
+    return el;
+  }
+
+  function addTextBox(box, im, rx, ry){
+    const fontPx = parseInt(fontSizeInput.value, 10) || 19;
+    const wPx = Math.min(220, Math.max(60, im.w * (1 - rx)));
+    const t = {
+      id: genId(),
+      rx: Math.max(0, Math.min(rx, 0.98)),
+      ry: Math.max(0, Math.min(ry, 0.98)),
+      rw: wPx / im.w,
+      fsr: fontPx / im.w,
+      color: textColor,
+      text: ''
+    };
+    if(!im.texts) im.texts = [];
+    im.texts.push(t);
+    const el = createTextBoxEl(box, im, t);
+    deselectAllImages();
+    el.querySelector('.tb-body').focus();
+  }
+
+  function removeTextBox(box, im, id){
+    if(im.texts) im.texts = im.texts.filter(t => t.id !== id);
+    const el = box.querySelector(`.img-text[data-id="${id}"]`);
+    if(el) el.remove();
+    scheduleSave();
+  }
+
+  function dragTextBox(e, el, box, im, mode){
+    if(e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const t = el._data;
+    const target = e.currentTarget;
+    target.setPointerCapture(e.pointerId);
+    const startX = e.clientX, startY = e.clientY;
+    const orig = { rx: t.rx, ry: t.ry, rw: t.rw };
+    function onMove(ev){
+      const dx = (ev.clientX - startX) / im.w;
+      const dy = (ev.clientY - startY) / im.h;
+      if(mode === 'move'){
+        t.rx = Math.max(-0.5, Math.min(orig.rx + dx, 0.98));
+        t.ry = Math.max(-0.5, Math.min(orig.ry + dy, 0.98));
+      } else {
+        t.rw = Math.max(30 / im.w, orig.rw + dx);
+      }
+      layoutTextBoxes(box, im);
+    }
+    function onUp(){
+      target.removeEventListener('pointermove', onMove);
+      target.removeEventListener('pointerup', onUp);
+      target.removeEventListener('pointercancel', onUp);
+      scheduleSave();
+    }
+    target.addEventListener('pointermove', onMove);
+    target.addEventListener('pointerup', onUp);
+    target.addEventListener('pointercancel', onUp);
+  }
+
+  // ---------- 画像の選択（複数選択可） ----------
+  // selOrder は選んだ順番。横幅そろえ(W)は最初に選んだ画像の幅に合わせる
+  let selOrder = [];
+  function boxById(id){ return imagesLayerEl.querySelector(`.img-box[data-id="${id}"]`); }
+  function imgDataById(id){ return (notes[activeIndex].images || []).find(im => im.id === id); }
   function selectImageBox(box){
     deselectAllImages();
     box.classList.add('selected');
+    selOrder = [box.dataset.id];
+  }
+  function toggleImageSelection(box){
+    const id = box.dataset.id;
+    if(box.classList.toggle('selected')){
+      selOrder.push(id);
+    } else {
+      selOrder = selOrder.filter(x => x !== id);
+    }
   }
   function deselectAllImages(){
     imagesLayerEl.querySelectorAll('.img-box.selected').forEach(b=> b.classList.remove('selected'));
+    selOrder = [];
   }
   document.addEventListener('pointerdown', (e)=>{
     if(!e.target.closest || !e.target.closest('.img-box')){
@@ -784,34 +1025,102 @@
     }
   }, true);
 
-  function startMove(e, box, imgData){
+  // ---------- 画像の上の手書きを画像に追従させる ----------
+  // 動かす・大きさを変える直前に、画像の範囲にある手書きを切り取って画像の上に重ねて持ち運び、
+  // 終わったら新しい位置・大きさで手書きレイヤーに描き戻す。
+  function liftInk(box, im){
+    const px = Math.max(0, Math.floor(im.x * DPR));
+    const py = Math.max(0, Math.floor(im.y * DPR));
+    const pw = Math.min(canvas.width, Math.ceil((im.x + im.w) * DPR)) - px;
+    const ph = Math.min(canvas.height, Math.ceil((im.y + im.h) * DPR)) - py;
+    if(pw <= 0 || ph <= 0) return null;
+    const c = document.createElement('canvas');
+    c.className = 'img-ink';
+    c.width = pw; c.height = ph;
+    c.getContext('2d').drawImage(canvas, px, py, pw, ph, 0, 0, pw, ph);
+    ctx.save();
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(px, py, pw, ph);
+    ctx.restore();
+    // 画像に対する相対位置（%）で置くので、拡大縮小中も画像と一緒に伸び縮みして見える
+    const f = {
+      l: (px / DPR - im.x) / im.w, t: (py / DPR - im.y) / im.h,
+      w: (pw / DPR) / im.w,        h: (ph / DPR) / im.h
+    };
+    c._frac = f;
+    c.style.left = (f.l * 100) + '%';
+    c.style.top = (f.t * 100) + '%';
+    c.style.width = (f.w * 100) + '%';
+    c.style.height = (f.h * 100) + '%';
+    box.insertBefore(c, box.querySelector('.img-del'));
+    return c;
+  }
+  function dropInk(c, im){
+    if(!c) return;
+    const f = c._frac;
+    const dx = (im.x + f.l * im.w) * DPR;
+    const dy = (im.y + f.t * im.h) * DPR;
+    const dw = f.w * im.w * DPR;
+    const dh = f.h * im.h * DPR;
+    ctx.save();
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.globalCompositeOperation = 'source-over';
+    if(Math.abs(dw - c.width) < 0.5 && Math.abs(dh - c.height) < 0.5){
+      ctx.drawImage(c, Math.round(dx), Math.round(dy)); // 移動だけなら劣化させずにそのまま戻す
+    } else {
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(c, dx, dy, dw, dh);
+    }
+    ctx.restore();
+    c.remove();
+  }
+  // 画像を動かすと、それ以前の手書きUndo履歴は位置が合わなくなるので捨てる
+  function afterImageTransform(){
+    undoStack.length = 0;
+    redoStack.length = 0;
+    scheduleSave();
+  }
+
+  function startMove(e, box){
     e.preventDefault();
     box.setPointerCapture(e.pointerId);
+    const items = selOrder.map(id => ({ box: boxById(id), im: imgDataById(id) }))
+                          .filter(it => it.box && it.im);
+    items.forEach(it=>{ it.ox = it.im.x; it.oy = it.im.y; it.ink = liftInk(it.box, it.im); });
+    // まとめて動かしても、どの画像も紙からはみ出さない範囲に移動量を制限する
+    const wrapW = wrap.clientWidth;
+    const minDx = Math.max(...items.map(it => -it.ox));
+    const maxDx = Math.min(...items.map(it => Math.max(0, wrapW - it.im.w) - it.ox));
+    const minDy = Math.max(...items.map(it => -it.oy));
     const startX = e.clientX, startY = e.clientY;
-    const origX = imgData.x, origY = imgData.y;
     function onMove(ev){
-      const dx = ev.clientX - startX, dy = ev.clientY - startY;
-      let nx = origX + dx, ny = origY + dy;
-      nx = Math.max(0, Math.min(nx, Math.max(0, wrap.clientWidth - imgData.w)));
-      ny = Math.max(0, ny);
-      imgData.x = nx; imgData.y = ny;
-      box.style.left = nx + 'px';
-      box.style.top = ny + 'px';
+      const dx = Math.max(minDx, Math.min(maxDx, ev.clientX - startX));
+      const dy = Math.max(minDy, ev.clientY - startY);
+      items.forEach(it=>{
+        it.im.x = it.ox + dx; it.im.y = it.oy + dy;
+        it.box.style.left = it.im.x + 'px';
+        it.box.style.top = it.im.y + 'px';
+      });
       measureAndGrow();
     }
     function onUp(){
       box.removeEventListener('pointermove', onMove);
       box.removeEventListener('pointerup', onUp);
-      scheduleSave();
+      box.removeEventListener('pointercancel', onUp);
+      measureAndGrow();
+      items.forEach(it => dropInk(it.ink, it.im));
+      afterImageTransform();
     }
     box.addEventListener('pointermove', onMove);
     box.addEventListener('pointerup', onUp);
+    box.addEventListener('pointercancel', onUp);
   }
 
   function startResize(e, box, imgData){
     e.preventDefault();
     e.stopPropagation();
     box.setPointerCapture(e.pointerId);
+    const ink = liftInk(box, imgData);
     const startX = e.clientX, startY = e.clientY;
     const origW = imgData.w, origH = imgData.h;
     const aspect = origW / (origH || 1);
@@ -829,31 +1138,66 @@
       imgData.w = newW; imgData.h = newH;
       box.style.width = newW + 'px';
       box.style.height = newH + 'px';
+      layoutTextBoxes(box, imgData);
       measureAndGrow();
     }
     function onUp(){
       box.removeEventListener('pointermove', onMove);
       box.removeEventListener('pointerup', onUp);
-      scheduleSave();
+      box.removeEventListener('pointercancel', onUp);
+      measureAndGrow();
+      dropInk(ink, imgData);
+      afterImageTransform();
     }
     box.addEventListener('pointermove', onMove);
     box.addEventListener('pointerup', onUp);
+    box.addEventListener('pointercancel', onUp);
+  }
+
+  // 選んだ画像の横幅を、最初に選んだ画像の幅にそろえる（縦横比は保つ。上の手書きも一緒に伸縮）
+  function alignSelectedWidths(){
+    if(selOrder.length < 2) return;
+    const base = imgDataById(selOrder[0]);
+    if(!base) return;
+    const wrapW = wrap.clientWidth;
+    selOrder.slice(1).forEach(id=>{
+      const im = imgDataById(id), box = boxById(id);
+      if(!im || !box) return;
+      const ink = liftInk(box, im);
+      const aspect = im.w / (im.h || 1);
+      im.w = base.w;
+      im.h = base.w / aspect;
+      if(im.x + im.w > wrapW) im.x = Math.max(0, wrapW - im.w);
+      box.style.left = im.x + 'px';
+      box.style.width = im.w + 'px';
+      box.style.height = im.h + 'px';
+      layoutTextBoxes(box, im);
+      measureAndGrow();
+      dropInk(ink, im);
+    });
+    afterImageTransform();
   }
 
   function removeImage(id){
     const note = notes[activeIndex];
     const idx = note.images.findIndex(im => im.id === id);
-    if(idx >= 0) note.images.splice(idx, 1);
-    const box = imagesLayerEl.querySelector(`.img-box[data-id="${id}"]`);
+    const box = boxById(id);
+    if(idx >= 0){
+      // 画像の上の手書きも一緒に消す（画像の一部として扱っているため）
+      if(box) liftInk(box, note.images[idx]);
+      note.images.splice(idx, 1);
+    }
     if(box){
       const img = box.querySelector('img');
       if(img && img._objectUrl) URL.revokeObjectURL(img._objectUrl);
       box.remove();
     }
-    scheduleSave();
+    selOrder = selOrder.filter(x => x !== id);
+    afterImageTransform();
   }
 
-  async function addImageToNote(blob, dims){
+  // pos を渡すとその位置（紙の座標）に置く。省略時は今見えている範囲の左上
+  async function addImageToNote(blob, dims, pos){
     const wrapW = wrap.clientWidth;
     const maxW = Math.min(wrapW - 40, 480);
     let w = dims.w, h = dims.h;
@@ -861,15 +1205,17 @@
       h = h * (maxW / w);
       w = maxW;
     }
-    const scrollTop = wrap.scrollTop;
-    const x = 20;
-    const y = scrollTop + 20;
+    let x = 20, y = wrap.scrollTop + 20;
+    if(pos){
+      x = Math.max(0, Math.min(pos.x, wrapW - w));
+      y = Math.max(0, pos.y);
+    }
     const note = notes[activeIndex];
     const imgData = { id: genId(), x, y, w, h, src: blob };
     note.images.push(imgData);
     createImageBoxEl(imgData);
     measureAndGrow();
-    selectImageBox(imagesLayerEl.querySelector(`.img-box[data-id="${imgData.id}"]`));
+    selectImageBox(boxById(imgData.id));
     scheduleSave();
   }
 
@@ -1016,21 +1362,42 @@
   wrap.addEventListener('dragleave', (e)=>{
     if(e.target === wrap || !wrap.contains(e.relatedTarget)) wrap.classList.remove('drag-over');
   });
-  wrap.addEventListener('drop', (e)=>{
+  wrap.addEventListener('drop', async (e)=>{
     wrap.classList.remove('drag-over');
     const files = e.dataTransfer ? Array.from(e.dataTransfer.files || []) : [];
     if(!files.length) return;
-    e.preventDefault(); // PDF以外のファイルでもブラウザがそのファイルを開いてしまわないように
-    const f = files.find(isPdfFile);
-    if(f) importPdf(f);
+    e.preventDefault(); // 対応外のファイルでもブラウザがそのファイルを開いてしまわないように
+
+    // 画像はドロップした位置に置く（貼り付けと同じく、大きすぎるものは縮小）。複数なら少しずつずらす
+    const images = files.filter(f => f.type && f.type.startsWith('image/'));
+    const r = sheet.getBoundingClientRect();
+    let pos = { x: e.clientX - r.left, y: e.clientY - r.top };
+    for(const f of images){
+      try{
+        const dims = await getImageDimsFromBlob(f);
+        await addImageToNote(f, dims, pos);
+        pos = { x: pos.x + 24, y: pos.y + 24 };
+      }catch(err){
+        console.error('image drop failed', err);
+      }
+    }
+
+    const pdfFile = files.find(isPdfFile);
+    if(pdfFile) importPdf(pdfFile);
   });
 
   window.addEventListener('keydown', (e)=>{
+    const ae = document.activeElement;
+    if(ae === textEl || (ae && ae.isContentEditable)) return; // 文字入力中は普通のキー操作
     if(e.key === 'Delete' || e.key === 'Backspace'){
-      const sel = imagesLayerEl.querySelector('.img-box.selected');
-      if(sel && document.activeElement !== textEl){
+      if(selOrder.length){
         e.preventDefault();
-        removeImage(sel.dataset.id);
+        [...selOrder].forEach(id => removeImage(id));
+      }
+    } else if((e.key === 'w' || e.key === 'W') && !e.ctrlKey && !e.metaKey && !e.altKey){
+      if(selOrder.length >= 2){
+        e.preventDefault();
+        alignSelectedWidths();
       }
     }
   });
