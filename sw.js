@@ -3,14 +3,16 @@
 // オフラインの時だけ最後に取得できたキャッシュにフォールバックします。
 // これにより index.html だけ更新すれば、次回アクセス時に自動で反映されます。
 
-const CACHE_NAME = 'memo-notepad-v2';
+const CACHE_NAME = 'memo-notepad-v3';
 const APP_SHELL = [
   './',
   './index.html',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
-  './icons/apple-touch-icon.png'
+  './icons/apple-touch-icon.png',
+  './lib/pdfjs/pdf.min.js',
+  './lib/pdfjs/pdf.worker.min.js'
 ];
 
 self.addEventListener('install', (event) => {

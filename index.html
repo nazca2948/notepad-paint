@@ -247,6 +247,22 @@
     display:none;
   }
   .img-box.selected .img-del{display:flex;align-items:center;justify-content:center;}
+  /* PDFのページ：位置固定（動かしたり消したりしない）。文字入力のクリックは下のtextareaに通す */
+  .img-box.locked{pointer-events:none;}
+  .img-box.locked img{box-shadow:0 1px 4px rgba(0,0,0,0.25);}
+
+  button#openPdf{
+    border:1px solid #c9c9c9;
+    background:#fff;
+    padding:4px 10px;
+    border-radius:4px;
+    font-size:13px;
+    cursor:pointer;
+    color:#333;
+  }
+  button#openPdf:hover{background:#eef1fb;}
+  button#openPdf:disabled{opacity:0.5;cursor:default;}
+  .editor-wrap.drag-over{outline:3px dashed #7ea3f0;outline-offset:-6px;}
 
   canvas#ink{
     position:absolute;top:0;left:0;
@@ -261,6 +277,8 @@
   <div class="topbar">
     <span class="title">メモ帳</span>
     <div class="right">
+      <button id="openPdf" title="PDFを開いて手書きで書き込む（ドラッグ＆ドロップでも可）">📄 PDF</button>
+      <input type="file" id="pdfInput" accept="application/pdf,.pdf" hidden>
       <button id="toggleDraw">✏ 手書き</button>
       <span id="status">読み込み中…</span>
     </div>
@@ -737,6 +755,13 @@
     imgEl.draggable = false;
     box.appendChild(imgEl);
 
+    // PDFのページは固定表示（移動・リサイズ・削除のハンドルを付けない）
+    if(imgData.locked){
+      box.classList.add('locked');
+      imagesLayerEl.appendChild(box);
+      return box;
+    }
+
     const delBtn = document.createElement('div');
     delBtn.className = 'img-del';
     delBtn.textContent = '×';
@@ -882,6 +907,148 @@
     }catch(err){
       console.error('image paste failed', err);
     }
+  });
+
+  // ---------- PDFの読み込み ----------
+  // 各ページを画像にして新しいタブに縦に並べる（位置固定）。その上の手書きレイヤーにそのまま書き込める。
+  // pdf.js (v3.11.174, lib/pdfjs に同梱＝オフラインでも動く) は初めて使うときだけ読み込む。
+  const PDFJS_BASE = 'lib/pdfjs/';
+  const PAGE_GAP = 16;
+  const PAGE_MARGIN = 20;
+  // ブラウザのキャンバスの高さ上限（約32767px）を超えないようにする
+  const MAX_SHEET_PX = 32000;
+  let pdfjsPromise = null;
+  function loadPdfJs(){
+    if(window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+    if(!pdfjsPromise){
+      pdfjsPromise = new Promise((resolve, reject)=>{
+        const s = document.createElement('script');
+        s.src = PDFJS_BASE + 'pdf.min.js';
+        s.onload = ()=>{
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_BASE + 'pdf.worker.min.js';
+          resolve(window.pdfjsLib);
+        };
+        s.onerror = ()=>{ pdfjsPromise = null; reject(new Error('PDF読み込み機能（lib/pdfjs）が見つかりません')); };
+        document.head.appendChild(s);
+      });
+    }
+    return pdfjsPromise;
+  }
+
+  function renderPageToBlob(page, scale){
+    const vp = page.getViewport({ scale });
+    const c = document.createElement('canvas');
+    c.width = Math.ceil(vp.width);
+    c.height = Math.ceil(vp.height);
+    const cctx = c.getContext('2d');
+    cctx.fillStyle = '#fff';
+    cctx.fillRect(0, 0, c.width, c.height);
+    return page.render({ canvasContext: cctx, viewport: vp }).promise.then(()=> new Promise((resolve)=>{
+      c.toBlob((blob)=>{ c.width = c.height = 0; resolve(blob); }, 'image/jpeg', 0.92);
+    }));
+  }
+
+  const openPdfBtn = document.getElementById('openPdf');
+  const pdfInput = document.getElementById('pdfInput');
+  let pdfLoading = false;
+
+  async function importPdf(file){
+    if(pdfLoading || busy) return;
+    pdfLoading = true;
+    openPdfBtn.disabled = true;
+    const prevStatus = statusEl.textContent;
+    let pdf = null;
+    try{
+      statusEl.textContent = 'PDF準備中…';
+      const pdfjs = await loadPdfJs();
+      const data = new Uint8Array(await file.arrayBuffer());
+      pdf = await pdfjs.getDocument({ data }).promise;
+
+      // 表示サイズを決める：画面幅に合わせつつ、全ページの合計が紙の上限に収まるようにする
+      const sizes = [];
+      for(let i=1; i<=pdf.numPages; i++){
+        const p = await pdf.getPage(i);
+        const vp = p.getViewport({ scale: 1 });
+        sizes.push({ w: vp.width, h: vp.height });
+      }
+      const maxSheet = Math.floor(MAX_SHEET_PX / DPR) - PAGE_MARGIN * 2;
+      let pageW = Math.min(wrap.clientWidth - PAGE_MARGIN * 2, 900);
+      const totalAt = (w)=> sizes.reduce((s, sz)=> s + w * sz.h / sz.w + PAGE_GAP, 0);
+      if(totalAt(pageW) > maxSheet){
+        pageW = Math.max(400, pageW * maxSheet / totalAt(pageW));
+      }
+      let pageCount = 0, acc = 0;
+      for(const sz of sizes){
+        acc += pageW * sz.h / sz.w + PAGE_GAP;
+        if(acc > maxSheet) break;
+        pageCount++;
+      }
+
+      const images = [];
+      let y = PAGE_MARGIN;
+      for(let i=1; i<=pageCount; i++){
+        statusEl.textContent = `PDF読み込み中 ${i}/${pageCount}`;
+        const page = await pdf.getPage(i);
+        const sz = sizes[i-1];
+        const h = pageW * sz.h / sz.w;
+        // 画面の実ピクセルより少し高めの解像度で描いておく（拡大しても文字がにじみにくい）
+        const scale = Math.min(pageW * DPR * 1.5, 2400) / sz.w;
+        const blob = await renderPageToBlob(page, scale);
+        images.push({ id: genId(), x: PAGE_MARGIN, y, w: pageW, h, src: blob, locked: true });
+        y += h + PAGE_GAP;
+        page.cleanup();
+      }
+
+      await runTabOp(async ()=>{
+        await saveActiveNoteState();
+        const note = makeEmptyNote();
+        note.title = file.name.replace(/\.pdf$/i, '');
+        note.images = images;
+        notes.push(note);
+        activeIndex = notes.length - 1;
+        await loadNoteIntoUI(activeIndex);
+        renderTabs();
+      });
+      setDrawMode(true);
+
+      if(pageCount < pdf.numPages){
+        alert(`ページ数が多いため、最初の ${pageCount} ページだけを読み込みました（全 ${pdf.numPages} ページ）。`);
+      }
+    }catch(err){
+      console.error('pdf import failed', err);
+      statusEl.textContent = prevStatus;
+      alert('PDFを開けませんでした：' + (err && err.message ? err.message : err));
+    }finally{
+      if(pdf) pdf.destroy();
+      pdfLoading = false;
+      openPdfBtn.disabled = false;
+    }
+  }
+
+  openPdfBtn.addEventListener('click', ()=> pdfInput.click());
+  pdfInput.addEventListener('change', ()=>{
+    const f = pdfInput.files && pdfInput.files[0];
+    pdfInput.value = ''; // 同じファイルをもう一度選んでも反応するように
+    if(f) importPdf(f);
+  });
+
+  // PDFファイルを画面にドラッグ＆ドロップしても開ける
+  function isPdfFile(f){ return f && (f.type === 'application/pdf' || /\.pdf$/i.test(f.name)); }
+  wrap.addEventListener('dragover', (e)=>{
+    if(!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+    e.preventDefault();
+    wrap.classList.add('drag-over');
+  });
+  wrap.addEventListener('dragleave', (e)=>{
+    if(e.target === wrap || !wrap.contains(e.relatedTarget)) wrap.classList.remove('drag-over');
+  });
+  wrap.addEventListener('drop', (e)=>{
+    wrap.classList.remove('drag-over');
+    const files = e.dataTransfer ? Array.from(e.dataTransfer.files || []) : [];
+    if(!files.length) return;
+    e.preventDefault(); // PDF以外のファイルでもブラウザがそのファイルを開いてしまわないように
+    const f = files.find(isPdfFile);
+    if(f) importPdf(f);
   });
 
   window.addEventListener('keydown', (e)=>{

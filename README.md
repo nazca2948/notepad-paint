@@ -2,12 +2,15 @@
 
 シンプルなメモ帳アプリです。普段はタイピング、「✏ 手書き」ボタンで手書きレイヤーに切り替えて使えます。
 
+「📄 PDF」ボタン（またはPDFファイルを画面にドラッグ＆ドロップ）でPDFを開くと、各ページが新しいタブに縦に並び、その上に手書きで書き込めます。
+
 ## ファイル構成
 
 ```
 index.html          本体
 manifest.json        PWA設定（アプリ名・アイコン・色など）
 sw.js                 オフラインキャッシュ用 Service Worker
+lib/pdfjs/            PDF表示ライブラリ（pdf.js v3.11.174, Apache-2.0）
 icons/
   icon-192.png
   icon-512.png
