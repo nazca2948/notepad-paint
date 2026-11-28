@@ -22,7 +22,7 @@
       <div class="file-group">
         <button class="file-btn" id="exportBtn" title="このメモをファイルにダウンロード（Ctrl+S）">保存</button>
         <button class="file-btn" id="importBtn" title="保存したファイルを開く（Ctrl+O／ファイルをドロップでも可）">開く</button>
-        <input type="file" id="importInput" accept=".json,application/json" hidden>
+        <input type="file" id="importInput" accept=".npmemo,.json,application/json" hidden>
       </div>
       <button id="toggleDraw">✏ 手書き</button>
     </div>
@@ -60,8 +60,10 @@
       <button class="swatch" data-color="#2f7a4f" style="background:#2f7a4f;"></button>
     </div>
     <div class="group">
-      <span>太さ</span>
-      <input type="range" id="width" min="1" max="14" value="3">
+      <span id="sizeLabel">太さ</span>
+      <button class="size" data-i="0" title="細い"><i style="width:4px;height:4px;"></i></button>
+      <button class="size" data-i="1" title="ふつう"><i style="width:7px;height:7px;"></i></button>
+      <button class="size" data-i="2" title="太い"><i style="width:11px;height:11px;"></i></button>
     </div>
     <div class="group">
       <button class="action" id="clearInk">手書き消去</button>

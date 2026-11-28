@@ -159,7 +159,19 @@ button#toggleDraw.active{
   cursor:pointer;padding:0;
 }
 .swatch.selected, .tswatch.selected{border-color:#555;}
-.inkbar input[type=range]{width:70px;}
+/* 太さ（3段階）。ペンと消しゴムで別々に覚える */
+.inkbar button.size{
+  width:24px;height:24px;
+  display:flex;align-items:center;justify-content:center;
+  border:1px solid transparent;
+  background:transparent;
+  border-radius:4px;
+  cursor:pointer;
+  padding:0;
+}
+.inkbar button.size:hover{background:#e0e7fb;}
+.inkbar button.size.active{background:#fff;border-color:#a9bce8;}
+.inkbar button.size i{display:block;border-radius:50%;background:#333;}
 .inkbar input[type=number]{
   width:40px;
   padding:2px 4px;
@@ -246,8 +258,8 @@ textarea#text{
 /* PDFのページ：貼り付け画像と同じく移動・拡大縮小できる。少し影を付けて紙らしく */
 .img-box.pdf-page img{box-shadow:0 1px 4px rgba(0,0,0,0.25);}
 .img-box.pdf-page.selected img{box-shadow:0 0 0 2px #7ea3f0;}
-/* 移動・拡大縮小中だけ、画像の上の手書きをここに乗せて一緒に動かす */
-.img-box .img-ink{position:absolute;pointer-events:none;}
+/* 画像ごとの手書きレイヤー（画像と一緒に動き、伸縮する） */
+.img-box .img-ink-layer{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;}
 
 /* ロックした画像：移動・拡大縮小・削除できない（書き込み・テキストはできる） */
 .img-box.lock .img-handle, .img-box.lock .img-del{display:none !important;}
